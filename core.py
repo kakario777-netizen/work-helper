@@ -152,6 +152,16 @@ def guess_keyword(filename, text):
     return cands[0] if cands else stem
 
 
+def guess_title(text):
+    """원고의 제목 = 처음 나오는 글자 있는 줄 ('제목:' 같은 머리말은 떼고)"""
+    for line in text.splitlines():
+        line = line.strip().lstrip("\ufeff")
+        if line:
+            line = re.sub(r"^(\[?제목\]?\s*[:：]?\s*)", "", line).strip()
+            return line or "-"
+    return "-"
+
+
 def count_keywords(text, keyword_field):
     """'서울역피부과, 수술흉터제거' → [('서울역피부과', 5), ...]"""
     res = []

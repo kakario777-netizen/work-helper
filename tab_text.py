@@ -130,8 +130,8 @@ class TextTab(ttk.Frame):
 
 class CheckPanel(ttk.Frame):
     """메모장 원고 여러 개를 끌어다 놓으면 파일별 글자수·키워드 수·금지어를 표로"""
-    COLS = (("file", "파일", 220, "w"), ("kw", "키워드 (더블클릭해서 수정)", 200, "w"),
-            ("kwn", "키워드 수", 130, "center"), ("ns", "공백 제외", 80, "center"),
+    COLS = (("file", "파일", 180, "w"), ("kw", "키워드 (더블클릭해서 수정)", 170, "w"),
+            ("title", "제목", 300, "w"), ("kwn", "키워드 수", 110, "center"), ("ns", "공백 제외", 80, "center"),
             ("ws", "공백 포함", 80, "center"), ("bad", "금지어", 200, "w"))
 
     def __init__(self, master, app):
@@ -254,7 +254,7 @@ class CheckPanel(ttk.Frame):
         bad = core.count_forbidden(d["text"], self._forbidden_words())
         badtxt = "  ".join(f"{w}:{n}개" for w, n in bad) if bad else "없음"
         tags = ("bad",) if bad else (("nokw",) if not kws or any(n == 0 for _, n in kws) else ())
-        self.tree.item(iid, values=(os.path.basename(d["path"]), d["kw"], kwn,
+        self.tree.item(iid, values=(os.path.basename(d["path"]), d["kw"], core.guess_title(d["text"]), kwn,
                                     f"{st['no_space']:,}", f"{st['with_space']:,}", badtxt), tags=tags)
 
     def _refresh_later(self):
