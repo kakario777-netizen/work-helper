@@ -431,7 +431,10 @@ def main():
             print("random:", kw["width"], kw["trim"], kw["aspect"], flush=True)
             app.collect()
             print("saved keys:", sorted(k for k in app.settings if k.startswith(("img_", "panes", "im_")))[:12], flush=True)
-            print("update check:", updater.latest_release().get("tag"), "ver", VERSION, flush=True)
+            try:   # 빌드 서버는 GitHub 요청 횟수 제한에 걸릴 수 있어 실패해도 넘어감
+                print("update check:", updater.latest_release().get("tag"), "ver", VERSION, flush=True)
+            except Exception as e:
+                print("update check skipped:", e, flush=True)
             rng = random.Random()
             for _ in range(2):
                 top = core.next_numbered_dir(tmp, cap._out_base(cap.sel[0]))
