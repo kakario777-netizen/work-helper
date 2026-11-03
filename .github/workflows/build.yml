@@ -26,12 +26,22 @@ jobs:
           echo "ver=$V" >> "$GITHUB_OUTPUT"
           echo "VERSION = \"$V\"" > version.py
 
-      - name: 라이브러리 설치 (실행기 직접 컴파일 - 백신 오진 줄이기)
-        env:
-          PYINSTALLER_COMPILE_BOOTLOADER: "1"
+      - name: 라이브러리 설치
+        run: pip install -r requirements.txt wheel
+
+      - name: 실행기 직접 컴파일 (백신 오진 줄이기)
+        shell: pwsh
         run: |
-          pip install -r requirements.txt
-          pip install --no-binary pyinstaller pyinstaller
+          pip download --no-binary :all: --no-deps pyinstaller -d pyi_src
+          $tar = Get-ChildItem pyi_src\*.tar.gz | Select-Object -First 1
+          tar -xzf $tar.FullName -C pyi_src
+          $src = Get-ChildItem pyi_src -Directory | Select-Object -First 1
+          Push-Location (Join-Path $src.FullName "bootloader")
+          python ./waf all --target-arch=64bit
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Pop-Location
+          pip install $src.FullName
+          python -c "import PyInstaller, os; d=os.path.join(os.path.dirname(PyInstaller.__file__),'bootloader','Windows-64bit-intel'); print(sorted(os.listdir(d)))"
 
       - name: 동작 확인
         run: python app.py --selftest
