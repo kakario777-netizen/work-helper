@@ -276,7 +276,7 @@ class UpdateDialog(tk.Toplevel):
             self._post("latest", f"최신 버전을 쓰고 있습니다. ({info['tag'] or VERSION})")
             return
         if not info["url"]:
-            self._post("err", f"새 버전 {info['tag']}이 있지만 내려받을 파일이 아직 준비되지 않았습니다.")
+            self._post("err", f"새 버전 {info['tag']}이 있지만 설치 파일이 아직 준비되지 않았습니다. 잠시 뒤 다시 눌러주세요.")
             return
         self._post("found", info)
         if not updater.is_frozen():
@@ -284,9 +284,7 @@ class UpdateDialog(tk.Toplevel):
             return
         try:
             z = updater.download(info["url"], lambda g, t: self._post("prog", g, t or info["size"]))
-            self._post("msg", "압축 푸는 중...")
-            new_dir = updater.extract(z)
-            self._post("apply", new_dir)
+            self._post("apply", z)
         except Exception as e:
             self._post("err", f"업데이트 중 문제가 생겼습니다.\n{e}")
 
@@ -317,10 +315,10 @@ class UpdateDialog(tk.Toplevel):
             elif kind == "msg":
                 self.msg.config(text=m[1])
             elif kind == "apply":
-                self.msg.config(text="새 버전으로 바꾸고 다시 시작합니다...")
+                self.msg.config(text="설치 중입니다. 관리자 확인 창이 뜨면 '예'를 눌러주세요.\n설치가 끝나면 자동으로 다시 켜집니다.")
                 self.update()
                 try:
-                    updater.launch_apply(m[1])
+                    updater.run_setup(m[1])
                 except Exception as e:
                     self.msg.config(text=f"새 버전을 실행하지 못했습니다.\n{e}")
                     return
@@ -347,6 +345,9 @@ def main():
         threading.Thread(target=updater.cleanup_later, daemon=True).start()
         app.status(f"{VERSION} 버전으로 업데이트했습니다.")
     if "--selftest" in sys.argv:
+        if "--selftest-out" in sys.argv:
+            out = open(sys.argv[sys.argv.index("--selftest-out") + 1], "w", encoding="utf-8")
+            sys.stdout = sys.stderr = out
         try:
             sys.stdout.reconfigure(encoding="utf-8")
         except Exception:
@@ -429,6 +430,7 @@ def main():
             from PIL import Image as I
             print("thumbs:", [I.open(os.path.join(th, f)).size for f in sorted(os.listdir(th))], flush=True)
             print("dnd:", bool(TkinterDnD), "docs:", known_folder("documents"), flush=True)
+            print("frozen:", updater.is_frozen(), flush=True)
             print("selftest ok", flush=True)
         root.after(800, test)
     root.mainloop()

@@ -1,8 +1,8 @@
 """업무 도우미 - 자동 업데이트
-흐름: GitHub 최신 릴리스 확인 → WorkHelper.zip 내려받기 → 임시 폴더에 풀기
-     → 새 버전 exe를 '--apply-update 설치폴더 옛PID' 로 실행하고 지금 프로그램 종료
-     → 새 exe가 옛 프로그램이 닫히길 기다렸다가 설치 폴더에 자기 파일을 덮어쓰고, 설치 폴더의 exe를 다시 실행
-(별도 bat·파워셸 스크립트를 쓰지 않음)"""
+흐름: GitHub 최신 릴리스 확인 → WorkHelper_Setup.exe 내려받기
+     → 설치 파일을 조용히 실행(관리자 확인 창 1번) 하고 지금 프로그램 종료
+     → 설치 파일이 Program Files 에 덮어쓴 뒤 프로그램을 다시 실행
+(예전 zip 방식 '--apply-update' 도 넘어오는 사람을 위해 남겨 둠)"""
 import json
 import os
 import re
@@ -16,16 +16,19 @@ import zipfile
 
 REPO = "kakario777-netizen/work-helper"
 ASSET = "WorkHelper.zip"
+SETUP = "WorkHelper_Setup.exe"
 EXE = "WorkHelper.exe"
 WORK = os.path.join(tempfile.gettempdir(), "WorkHelper_update")
 
 
 def is_frozen():
-    return getattr(sys, "frozen", False)
+    # PyInstaller는 sys.frozen, Nuitka는 모듈마다 __compiled__ 를 둠
+    return bool(getattr(sys, "frozen", False) or "__compiled__" in globals())
 
 
 def install_dir():
-    return os.path.dirname(os.path.abspath(sys.executable))
+    exe = sys.argv[0] if "__compiled__" in globals() else sys.executable
+    return os.path.dirname(os.path.abspath(exe))
 
 
 def parse_ver(v):
@@ -39,7 +42,7 @@ def latest_release(timeout=15):
                                  headers={"User-Agent": "WorkHelper", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.load(r)
-    asset = next((a for a in data.get("assets", []) if a.get("name") == ASSET), None)
+    asset = next((a for a in data.get("assets", []) if a.get("name") == SETUP), None)
     return {"tag": data.get("tag_name", ""), "notes": data.get("body") or "",
             "url": asset["browser_download_url"] if asset else None, "size": asset["size"] if asset else 0}
 
@@ -48,10 +51,10 @@ def is_newer(tag, current):
     return parse_ver(tag) > parse_ver(current)
 
 
-def download(url, progress=None):
+def download(url, progress=None, name=SETUP):
     shutil.rmtree(WORK, ignore_errors=True)
     os.makedirs(WORK, exist_ok=True)
-    zpath = os.path.join(WORK, ASSET)
+    zpath = os.path.join(WORK, name)
     req = urllib.request.Request(url, headers={"User-Agent": "WorkHelper"})
     with urllib.request.urlopen(req, timeout=60) as r, open(zpath, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
@@ -65,6 +68,16 @@ def download(url, progress=None):
             if progress:
                 progress(got, total)
     return zpath
+
+
+def run_setup(path):
+    """설치 파일을 조용히 실행(진행 막대만 보임). 끝나면 설치 파일이 프로그램을 다시 켬.
+    관리자 확인 창은 윈도우가 띄움"""
+    import ctypes
+    params = "/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /restart=1"
+    r = ctypes.windll.shell32.ShellExecuteW(None, "open", path, params, os.path.dirname(path), 1)
+    if r <= 32:
+        raise RuntimeError("설치 파일을 실행하지 못했습니다. (관리자 확인을 취소했다면 다시 시도해주세요)")
 
 
 def extract(zpath):

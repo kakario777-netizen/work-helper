@@ -239,11 +239,11 @@ PANES = []   # 저장할 폭 조절 영역들
 
 
 class Paned(tk.PanedWindow):
-    """눈에 보이는 폭 조절바(회색 굵은 막대 + 손잡이)가 있는 분할 영역. 위치는 자동 저장"""
+    """얇은 회색 줄로 폭을 조절하는 분할 영역(마우스를 대면 ↔ 표시). 위치는 자동 저장"""
 
     def __init__(self, master, app, key, orient="horizontal"):
-        super().__init__(master, orient=orient, sashwidth=9, sashrelief="raised", sashpad=1,
-                         showhandle=True, handlesize=14, handlepad=60, bg="#b9c3cf", bd=0,
+        super().__init__(master, orient=orient, sashwidth=5, sashrelief="flat", sashpad=0,
+                         showhandle=False, bg="#dcdfe3", bd=0,
                          opaqueresize=True, sashcursor="sb_h_double_arrow" if orient == "horizontal" else "sb_v_double_arrow")
         self.app = app
         self.key = key

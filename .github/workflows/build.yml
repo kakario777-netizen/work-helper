@@ -22,71 +22,70 @@ jobs:
         id: ver
         shell: bash
         run: |
-          V="1.3.${{ github.run_number }}"
+          V="1.4.${{ github.run_number }}"
           echo "ver=$V" >> "$GITHUB_OUTPUT"
           echo "VERSION = \"$V\"" > version.py
 
       - name: 라이브러리 설치
-        run: pip install -r requirements.txt wheel
+        run: pip install -r requirements.txt nuitka ordered-set zstandard
 
-      - name: 실행기 직접 컴파일 (백신 오진 줄이기)
-        shell: pwsh
-        run: |
-          pip download --no-binary :all: --no-deps pyinstaller -d pyi_src
-          $tar = Get-ChildItem pyi_src\*.tar.gz | Select-Object -First 1
-          tar -xzf $tar.FullName -C pyi_src
-          $src = Get-ChildItem pyi_src -Directory | Select-Object -First 1
-          Push-Location (Join-Path $src.FullName "bootloader")
-          python ./waf all --target-arch=64bit
-          if ($LASTEXITCODE -ne 0) { exit 1 }
-          Pop-Location
-          pip install $src.FullName
-          python -c "import PyInstaller, os; d=os.path.join(os.path.dirname(PyInstaller.__file__),'bootloader','Windows-64bit-intel'); print(sorted(os.listdir(d)))"
-
-      - name: 동작 확인
+      - name: 동작 확인 (소스)
         run: python app.py --selftest
         timeout-minutes: 3
 
-      - name: 버전 정보 파일
-        shell: python
-        run: |
-          v = open("version.py").read().split('"')[1]
-          a, b, c = (v.split(".") + ["0", "0", "0"])[:3]
-          open("version_info.txt", "w", encoding="utf-8").write(f"""
-          VSVersionInfo(
-            ffi=FixedFileInfo(filevers=({a},{b},{c},0), prodvers=({a},{b},{c},0), mask=0x3f, flags=0x0,
-                              OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
-            kids=[StringFileInfo([StringTable('041204B0', [
-                StringStruct('CompanyName', 'kakario777'),
-                StringStruct('FileDescription', 'WorkHelper - 업무 도우미'),
-                StringStruct('FileVersion', '{v}'),
-                StringStruct('InternalName', 'WorkHelper'),
-                StringStruct('OriginalFilename', 'WorkHelper.exe'),
-                StringStruct('ProductName', 'WorkHelper'),
-                StringStruct('ProductVersion', '{v}'),
-                StringStruct('LegalCopyright', 'kakario777')])]),
-              VarFileInfo([VarStruct('Translation', [0x0412, 1200])])])
-          """.replace("\n          ", "\n").strip())
+      - name: Nuitka 캐시
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\Nuitka
+          key: nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
 
-      - name: 프로그램 만들기 (폴더형)
-        run: >
-          pyinstaller --noconfirm --onedir --windowed --noupx --name WorkHelper
-          --version-file version_info.txt
-          --collect-all tkinterdnd2
-          app.py
-
-      - name: 자동 업데이트 교체 확인
+      - name: C로 컴파일 (Nuitka, 폴더형)
         shell: pwsh
         run: |
-          $d = Join-Path $env:RUNNER_TEMP "inst"
-          New-Item -ItemType Directory -Force $d | Out-Null
-          Start-Process -FilePath "dist\WorkHelper\WorkHelper.exe" -ArgumentList "--apply-update","$d","0","--no-restart" -Wait
-          if (!(Test-Path (Join-Path $d "WorkHelper.exe"))) { Write-Error "교체 실패"; exit 1 }
-          Get-ChildItem $d | Select-Object -First 5 | Format-Table Name
+          $v = "${{ steps.ver.outputs.ver }}"
+          python -m nuitka --standalone --assume-yes-for-downloads --msvc=latest `
+            --enable-plugin=tk-inter --windows-console-mode=disable `
+            --include-package=tkinterdnd2 `
+            --output-dir=build --output-filename=WorkHelper.exe `
+            --company-name=kakario777 --product-name=WorkHelper `
+            --file-description="WorkHelper" --copyright=kakario777 `
+            --file-version="$v.0" --product-version="$v.0" `
+            app.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Move-Item build\app.dist dist\WorkHelper
+          # 끌어다 놓기 부품(tkdnd)은 직접 복사
+          $dnd = python -c "import tkinterdnd2, os; print(os.path.join(os.path.dirname(tkinterdnd2.__file__), 'tkdnd'))"
+          Copy-Item -Recurse -Force $dnd dist\WorkHelper\tkinterdnd2\tkdnd
+          Get-ChildItem dist\WorkHelper | Select-Object -First 15 | Format-Table Name, Length
 
-      - name: 압축
+      - name: 동작 확인 (완성된 프로그램)
         shell: pwsh
-        run: Compress-Archive -Path dist\WorkHelper -DestinationPath WorkHelper.zip
+        timeout-minutes: 3
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "selftest.txt"
+          Start-Process -FilePath "dist\WorkHelper\WorkHelper.exe" -ArgumentList "--selftest","--selftest-out","$log" -Wait
+          Get-Content $log -Encoding utf8
+          if (!(Select-String -Path $log -Pattern "selftest ok" -Quiet)) { Write-Error "완성된 프로그램 점검 실패"; exit 1 }
+          if (!(Select-String -Path $log -Pattern "dnd: True" -Quiet)) { Write-Error "끌어다 놓기 부품 누락"; exit 1 }
+
+      - name: 설치 파일 만들기
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DMyAppVersion=${{ steps.ver.outputs.ver }}" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Compress-Archive -Path dist\WorkHelper -DestinationPath WorkHelper.zip
+
+      - name: 설치 확인
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "installer_out\WorkHelper_Setup.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          $exe = "$env:ProgramFiles\WorkHelper\WorkHelper.exe"
+          if (!(Test-Path $exe)) { Write-Error "설치 실패"; exit 1 }
+          Get-ChildItem "$env:PUBLIC\Desktop","$env:USERPROFILE\Desktop" -Filter *.lnk -ErrorAction SilentlyContinue | Format-Table Name
+          (Get-Item $exe).VersionInfo | Format-List FileVersion, CompanyName, ProductName
 
       - name: 릴리스에 올리기
         uses: softprops/action-gh-release@v2
@@ -97,6 +96,8 @@ jobs:
             ${{ github.event.head_commit.message }}
 
             ---
-            처음 한 번만: WorkHelper.zip 을 받아 원하는 곳(예: 문서 폴더)에 압축을 풀고 WorkHelper 폴더 안의 WorkHelper.exe 실행.
-            그다음부터는 프로그램 오른쪽 위 '업데이트 확인'으로 자동 업데이트됩니다.
-          files: WorkHelper.zip
+            처음 설치: WorkHelper_Setup.exe 를 받아 실행 → Program Files 에 설치되고 바탕화면에 '업무 도우미' 바로가기가 생깁니다.
+            이후 업데이트: 프로그램 오른쪽 위 '업데이트 확인'.
+          files: |
+            installer_out/WorkHelper_Setup.exe
+            WorkHelper.zip
