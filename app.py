@@ -1068,7 +1068,22 @@ def main():
     root = TkinterDnD.Tk() if TkinterDnD else tk.Tk()
     app = App(root)
     if "--selftest" in sys.argv:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
         def test():
+            try:
+                run_test()
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                sys.exitcode = 1
+            finally:
+                root.destroy()
+
+        def run_test():
             import tempfile
             from PIL import Image
             tmp = tempfile.mkdtemp()
@@ -1091,9 +1106,10 @@ def main():
             print("made:", [m[2] for m in made], flush=True)
             print("dnd:", bool(TkinterDnD), "docs:", known_folder("documents"), "desktop:", known_folder("desktop"), flush=True)
             print("selftest ok", flush=True)
-            root.destroy()
         root.after(800, test)
     root.mainloop()
+    if getattr(sys, "exitcode", 0):
+        sys.exit(1)
 
 
 if __name__ == "__main__":
