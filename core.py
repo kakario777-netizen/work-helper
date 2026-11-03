@@ -505,15 +505,27 @@ def make_folder_set(src_files, out_dir, rng, progress=None, **kw):
             progress()
 
 
+def pick_random(src_files, count, rng):
+    """가진 이미지에서 무작위로 count장 고르기.
+    count가 이미지 수 이하이면 중복 없이, 넘으면 모든 이미지를 고르게 한 바퀴씩 돌려 씀(연달아 같은 장 X)"""
+    src = list(src_files)
+    if not src:
+        return []
+    picks = []
+    while len(picks) < count:
+        need = count - len(picks)
+        batch = rng.sample(src, min(need, len(src)))
+        if picks and len(batch) > 1 and batch[0] == picks[-1]:
+            batch[0], batch[-1] = batch[-1], batch[0]
+        picks += batch
+    return picks
+
+
 def make_count_set(src_files, out_dir, count, rng, progress=None, **kw):
-    """원본을 고르게 돌려 쓰며 count장 만들어 1.jpg~"""
+    """보관된 이미지에서 무작위로 골라 count장 만들어 1.jpg~"""
     os.makedirs(out_dir, exist_ok=True)
-    order = []
-    for i in range(count):
-        if not order:
-            order = list(src_files)
-            rng.shuffle(order)
-        im, _ = make_variant(order.pop(), rng, **kw)
+    for i, src in enumerate(pick_random(src_files, count, rng)):
+        im, _ = make_variant(src, rng, **kw)
         save_with_new_meta(im, os.path.join(out_dir, f"{i + 1}.jpg"), rng)
         if progress:
             progress()

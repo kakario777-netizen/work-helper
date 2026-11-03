@@ -141,7 +141,7 @@ class LibraryTab(ttk.Frame):
         self.count = tk.IntVar(value=s.get(f"{self.k}_count", 5 if self.is_img else 10))
         ttk.Spinbox(g2, from_=1, to=500, textvariable=self.count, width=6).grid(row=0, column=1, sticky="w", padx=6)
         hint = ("폴더 하나에 원본 이미지 전부가\n한 장씩 변형되어 들어갑니다." if self.is_img
-                else "원본을 고르게 돌려 쓰며\n지정한 장수만큼 만듭니다.")
+                else "보관된 이미지에서 무작위로 골라 만듭니다.\n이미지 수 이하로 요청하면 중복 없음.")
         ttk.Label(g2, text=hint, foreground=GRAY, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.where = ttk.Label(g2, text="", foreground="#0a5", justify="left", wraplength=240)
         self.where.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
