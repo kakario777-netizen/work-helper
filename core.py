@@ -231,8 +231,11 @@ def process_image(src, out_dir, index, opts):
     dst = _unique(os.path.join(out_dir, name + ext))
     before = os.path.getsize(src)
 
-    # 크기·형식 변경이 없으면 원본 그대로 복사(화질 손실 없음)
-    if not opts.get("resize") and not fmt_info:
+    adj = opts.get("adjust") or {}
+    has_adj = any(float(v or 0) for v in adj.values())
+
+    # 크기·형식·색감 변경이 없으면 원본 그대로 복사(화질 손실 없음)
+    if not opts.get("resize") and not fmt_info and not has_adj:
         shutil.copy2(src, dst)
         return dst, before, os.path.getsize(dst)
 
@@ -251,6 +254,11 @@ def process_image(src, out_dir, index, opts):
                 nw, nh = (v, round(h * v / w)) if w > v else (w, h)
             if (nw, nh) != (w, h):
                 im = im.resize((max(1, nw), max(1, nh)), Image.LANCZOS)
+        if has_adj:
+            alpha = im.getchannel("A") if im.mode in ("RGBA", "LA") else None
+            im = apply_adjust(im.convert("RGB"), adj)
+            if alpha is not None and pil_fmt != "JPEG":
+                im.putalpha(alpha)
         q = int(opts.get("quality", 85))
         kw = {}
         if pil_fmt == "JPEG":
@@ -277,71 +285,161 @@ def human_size(n):
         n /= 1024
 
 
-# ─────────────────────────── 랜덤 캡쳐(병원 이미지·썸네일) ───────────────────────────
+# ─────────────────────────── 색감 조절 ───────────────────────────
 
-def _tone_lut(rng):
-    """감마 1~3%, 채널별 아주 미세한 색 틀어짐"""
-    g = 1 + rng.choice((-1, 1)) * rng.uniform(0.01, 0.03)
-    lut = []
-    for ch in range(3):
-        tint = 1 + rng.uniform(-0.006, 0.006)
-        for v in range(256):
-            x = (v / 255.0) ** (1 / g) * 255.0 * tint
-            lut.append(max(0, min(255, int(round(x)))))
-    return lut, g
+# (키, 이름, 최소, 최대)  값 단위는 대부분 %
+ADJUSTS = [
+    ("brightness", "밝기", -50, 50),
+    ("contrast", "대비", -50, 50),
+    ("saturation", "채도", -100, 100),
+    ("gamma", "감마", -50, 50),
+    ("highlights", "하이라이트", -50, 50),
+    ("shadows", "그림자", -50, 50),
+    ("temperature", "색온도(파랑↔주황)", -50, 50),
+    ("tint", "색조(초록↔자홍)", -50, 50),
+    ("hue", "색상 회전", -30, 30),
+    ("red", "빨강", -30, 30),
+    ("green", "초록", -30, 30),
+    ("blue", "파랑", -30, 30),
+    ("sharpness", "선명도", -100, 100),
+    ("blur", "흐림", 0, 30),
+    ("noise", "노이즈", 0, 30),
+    ("vignette", "가장자리 어둡게", 0, 50),
+]
 
 
-def make_variant(src_path, long_min, long_max, rng, aspect_jitter=0.05):
-    """원본을 사람이 캡쳐한 것처럼 무작위로 잘라 크기를 바꾸고 색감을 아주 살짝 틀어 줌.
-    반환: (PIL 이미지, 적용값 설명)"""
-    from PIL import Image, ImageOps, ImageEnhance
+def apply_adjust(im, p):
+    """RGB 이미지에 색감 값(p: {키: 값}) 적용"""
+    from PIL import Image, ImageEnhance, ImageFilter, ImageChops
+
+    def g(k):
+        try:
+            return float(p.get(k, 0) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    if im.mode != "RGB":
+        im = im.convert("RGB")
+    if g("hue"):
+        shift = int(round(g("hue") * 256 / 360)) % 256
+        h, s_, v = im.convert("HSV").split()
+        h = h.point(lambda x: (x + shift) % 256)
+        im = Image.merge("HSV", (h, s_, v)).convert("RGB")
+    if g("brightness"):
+        im = ImageEnhance.Brightness(im).enhance(1 + g("brightness") / 100)
+    if g("contrast"):
+        im = ImageEnhance.Contrast(im).enhance(1 + g("contrast") / 100)
+    if g("saturation"):
+        im = ImageEnhance.Color(im).enhance(max(0.0, 1 + g("saturation") / 100))
+
+    gam, hi, sh = 1 + g("gamma") / 100, g("highlights") / 100, g("shadows") / 100
+    temp, tint = g("temperature") / 100, g("tint") / 100
+    mult = (1 + temp * 0.5 + g("red") / 100,
+            1 - tint * 0.5 + g("green") / 100,
+            1 - temp * 0.5 + g("blue") / 100)
+    if gam != 1 or hi or sh or any(m != 1 for m in mult):
+        gam = max(0.1, gam)
+        lut = []
+        for ch in range(3):
+            for x in range(256):
+                n = (x / 255.0) ** (1 / gam)
+                n += sh * 0.2 * 6.75 * n * (1 - n) ** 2
+                n += hi * 0.2 * 6.75 * n * n * (1 - n)
+                n *= mult[ch]
+                lut.append(max(0, min(255, int(round(n * 255)))))
+        im = im.point(lut)
+
+    if g("sharpness"):
+        im = ImageEnhance.Sharpness(im).enhance(max(0.0, 1 + g("sharpness") / 100))
+    if g("blur") > 0:
+        im = im.filter(ImageFilter.GaussianBlur(g("blur") / 10))
+    if g("noise") > 0:
+        noise = Image.effect_noise(im.size, g("noise")).convert("RGB")
+        im = ImageChops.add(im, noise, 1.0, -128)
+    if g("vignette") > 0:
+        amt = g("vignette") / 100
+        m = Image.radial_gradient("L").resize(im.size)
+        m = m.point(lambda x: int(255 * (1 - amt * (min(x, 255) / 255) ** 2)))
+        im = ImageChops.multiply(im, Image.merge("RGB", (m, m, m)))
+    return im
+
+
+def _r1(x):
+    return round(x, 1)
+
+
+def random_base(rng):
+    """'랜덤' 버튼: 아주 약한 값들을 무작위로"""
+    def pm(a):
+        return _r1(rng.uniform(-a, a))
+
+    def maybe(a, prob):
+        return _r1(rng.uniform(0, a)) if rng.random() < prob else 0.0
+    vals = {
+        "brightness": pm(2), "contrast": pm(2), "saturation": pm(3), "gamma": pm(3),
+        "highlights": pm(4), "shadows": pm(4), "temperature": pm(3), "tint": pm(2),
+        "hue": pm(1), "red": pm(1.5), "green": pm(1.5), "blue": pm(1.5),
+        "sharpness": pm(10), "blur": maybe(3, 0.3), "noise": maybe(3, 0.3), "vignette": maybe(6, 0.4),
+    }
+    lmin = rng.randint(76, 86) * 10
+    size = {"lmin": lmin, "lmax": lmin + rng.randint(4, 12) * 10,
+            "tmin": rng.randint(2, 4), "tmax": rng.randint(5, 12), "aspect": _r1(rng.uniform(2, 6))}
+    return vals, size
+
+
+def micro_jitter(rng):
+    """장마다 덧붙는 아주 미세한 흔들림"""
+    def pm(lo, hi):
+        return rng.choice((-1, 1)) * rng.uniform(lo, hi)
+    j = {"brightness": pm(0.3, 1.2), "contrast": pm(0.3, 1.2), "saturation": pm(1, 2),
+         "gamma": pm(1, 3), "temperature": pm(0, 1.2), "tint": pm(0, 0.8),
+         "red": pm(0, 0.6), "green": pm(0, 0.6), "blue": pm(0, 0.6),
+         "highlights": pm(0, 2), "shadows": pm(0, 2)}
+    if rng.random() < 0.5:
+        j["sharpness"] = pm(0, 8)
+    return j
+
+
+def _load_rgb(src_path):
+    from PIL import Image, ImageOps
     with Image.open(src_path) as im:
         im = ImageOps.exif_transpose(im)
         if im.mode in ("RGBA", "LA", "P"):
             im = im.convert("RGBA")
             bg = Image.new("RGB", im.size, (255, 255, 255))
             bg.paste(im, mask=im.split()[-1])
-            im = bg
-        else:
-            im = im.convert("RGB")
-        W, H = im.size
+            return bg
+        return im.convert("RGB")
 
-        # 1) 자르기: 원본의 82~97%, 비율은 원본에서 살짝만 어긋나게, 위치는 랜덤
-        a = (W / H) * rng.uniform(1 - aspect_jitter, 1 + aspect_jitter)
-        scale = rng.uniform(0.82, 0.97)
-        cw = W * scale
-        ch = cw / a
-        if ch > H * 0.98:
-            ch = H * rng.uniform(0.85, 0.98)
-            cw = min(W, ch * a)
-        x = rng.uniform(0, max(0, W - cw))
-        y = rng.uniform(0, max(0, H - ch))
-        box = (int(x), int(y), int(x + cw), int(y + ch))
+
+def make_variant(src_path, rng, lmin=800, lmax=900, tmin=2, tmax=8, aspect=3.0, base=None, micro=True):
+    """테두리를 몇 픽셀씩(변마다 다르게) 잘라내고, 긴 변을 lmin~lmax로 맞추되
+    가로·세로 비율을 ±aspect% 안에서 살짝 어긋나게, 색감은 base + 미세 흔들림.
+    반환: (이미지, 설명)"""
+    from PIL import Image
+    im = _load_rgb(src_path)
+    W, H = im.size
+    L = rng.randint(min(lmin, lmax), max(lmin, lmax))
+    scale = L / max(W, H)
+    lo, hi = sorted((max(0, int(tmin)), max(0, int(tmax))))
+    # 출력 기준 픽셀을 원본 기준으로 환산, 한 변당 최대 4%까지만
+    cut = [min(rng.randint(lo, hi) / scale, (W if i % 2 == 0 else H) * 0.04) for i in range(4)]
+    box = (int(cut[0]), int(cut[1]), int(W - cut[2]), int(H - cut[3]))
+    if box[2] - box[0] > 10 and box[3] - box[1] > 10:
         im = im.crop(box)
-        cw, ch = im.size
-
-        # 2) 크기: 긴 변을 long_min~long_max에서 랜덤, 짧은 변은 비율 따라 + 몇 픽셀 엇나감
-        L = rng.randint(long_min, long_max)
-        if cw >= ch:
-            ow, oh = L, round(L * ch / cw) + rng.randint(-6, 6)
-        else:
-            oh, ow = L, round(L * cw / ch) + rng.randint(-6, 6)
-        im = im.resize((max(50, ow), max(50, oh)), Image.LANCZOS)
-
-        # 3) 색감: 밝기 ~1%, 대비 ~1%, 채도 1~2%, 감마 1~3%
-        sign = lambda: rng.choice((-1, 1))
-        br = 1 + sign() * rng.uniform(0.004, 0.012)
-        co = 1 + sign() * rng.uniform(0.004, 0.012)
-        sa = 1 + sign() * rng.uniform(0.01, 0.02)
-        im = ImageEnhance.Brightness(im).enhance(br)
-        im = ImageEnhance.Contrast(im).enhance(co)
-        im = ImageEnhance.Color(im).enhance(sa)
-        lut, g = _tone_lut(rng)
-        im = im.point(lut)
-        if rng.random() < 0.5:
-            im = ImageEnhance.Sharpness(im).enhance(1 + rng.uniform(-0.08, 0.08))
-        info = f"{im.size[0]}x{im.size[1]} 밝기{br:.3f} 대비{co:.3f} 채도{sa:.3f} 감마{g:.3f}"
-        return im, info
+    cw, ch = im.size
+    j = 1 + rng.uniform(-aspect, aspect) / 100
+    if cw >= ch:
+        ow, oh = L, round(L * ch / cw * j)
+    else:
+        oh, ow = L, round(L * cw / ch * j)
+    im = im.resize((max(20, ow), max(20, oh)), Image.LANCZOS)
+    params = dict(base or {})
+    if micro:
+        for k, v in micro_jitter(rng).items():
+            params[k] = float(params.get(k, 0) or 0) + v
+    im = apply_adjust(im, params)
+    return im, f"{im.size[0]}x{im.size[1]}"
 
 
 def save_with_new_meta(im, path, rng):
@@ -350,15 +448,14 @@ def save_with_new_meta(im, path, rng):
     t = datetime.now() - timedelta(seconds=rng.randint(0, 3 * 24 * 3600))
     stamp = t.strftime("%Y:%m:%d %H:%M:%S")
     exif = Image.Exif()
-    exif[0x0132] = stamp                         # DateTime
-    exif[0x0131] = rng.choice(["", "Windows Photo Editor", "Snipping Tool", "Microsoft Windows"])
-    exif[0x0131] = exif[0x0131] or None
-    if exif[0x0131] is None:
-        del exif[0x0131]
+    exif[0x0132] = stamp
+    soft = rng.choice(["", "Windows Photo Editor", "Snipping Tool", "Microsoft Windows"])
+    if soft:
+        exif[0x0131] = soft
     ifd = exif.get_ifd(0x8769)
-    ifd[0x9003] = stamp                          # DateTimeOriginal
-    ifd[0x9004] = stamp                          # DateTimeDigitized
-    ifd[0xA420] = "%032x" % rng.getrandbits(128)  # ImageUniqueID
+    ifd[0x9003] = stamp
+    ifd[0x9004] = stamp
+    ifd[0xA420] = "%032x" % rng.getrandbits(128)
     ifd[0xA002] = im.size[0]
     ifd[0xA003] = im.size[1]
     im.save(path, "JPEG", quality=rng.randint(89, 96), subsampling=rng.choice((0, 1, 2)),
@@ -374,22 +471,25 @@ def next_numbered_dir(parent, base):
     return os.path.join(parent, f"{base} {n}")
 
 
-def generate_set(src_files, out_dir, count, long_min, long_max, seed=None, progress=None):
-    """src_files에서 count장 만들어 out_dir에 1.jpg~ 로 저장. 원본을 고르게 돌아가며 사용"""
-    import random
-    rng = random.Random(seed)
+def make_folder_set(src_files, out_dir, rng, progress=None, **kw):
+    """원본 이미지 전부를 한 장씩 변형해 out_dir에 1.jpg~ (원본 순서대로)"""
+    os.makedirs(out_dir, exist_ok=True)
+    for i, src in enumerate(src_files):
+        im, _ = make_variant(src, rng, **kw)
+        save_with_new_meta(im, os.path.join(out_dir, f"{i + 1}.jpg"), rng)
+        if progress:
+            progress()
+
+
+def make_count_set(src_files, out_dir, count, rng, progress=None, **kw):
+    """원본을 고르게 돌려 쓰며 count장 만들어 1.jpg~"""
     os.makedirs(out_dir, exist_ok=True)
     order = []
-    made = []
     for i in range(count):
         if not order:
             order = list(src_files)
             rng.shuffle(order)
-        src = order.pop()
-        im, info = make_variant(src, long_min, long_max, rng)
-        p = os.path.join(out_dir, f"{i + 1}.jpg")
-        save_with_new_meta(im, p, rng)
-        made.append((p, os.path.basename(src), info))
+        im, _ = make_variant(order.pop(), rng, **kw)
+        save_with_new_meta(im, os.path.join(out_dir, f"{i + 1}.jpg"), rng)
         if progress:
-            progress(i + 1)
-    return made
+            progress()

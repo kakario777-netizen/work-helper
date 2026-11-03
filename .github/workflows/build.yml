@@ -34,7 +34,7 @@ jobs:
       - name: 버전 정하기
         id: ver
         shell: bash
-        run: echo "tag=v1.1.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=v1.2.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
       - name: 릴리스에 올리기
         uses: softprops/action-gh-release@v2
