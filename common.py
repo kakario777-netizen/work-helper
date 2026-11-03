@@ -75,9 +75,13 @@ def load_settings():
 
 
 def save_settings(s):
+    """설정을 안전하게 저장(임시 파일에 쓴 뒤 바꿔치기)"""
     try:
-        with open(settings_path(), "w", encoding="utf-8") as f:
+        p = settings_path()
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(s, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, p)
     except Exception:
         pass
 
@@ -160,7 +164,7 @@ class ScrollFrame(ttk.Frame):
 
 
 class AdjustPanel(ttk.Frame):
-    """색감 조절 바 묶음. get()/set() 으로 값 주고받기"""
+    """색감 조절 바 묶음.  왼쪽 체크 = '랜덤' 누를 때 바뀌는 항목"""
 
     def __init__(self, master, app, key, on_change=None):
         super().__init__(master)
@@ -169,21 +173,30 @@ class AdjustPanel(ttk.Frame):
         self.on_change = on_change
         self._job = None
         saved = app.settings.get(key, {})
-        self.vars = {}
+        rnd_saved = app.settings.get(key + "_rnd", {})
+        self.vars, self.rnd = {}, {}
         sf = ScrollFrame(self)
         sf.pack(fill="both", expand=True)
+        hdr = ttk.Frame(sf.inner)
+        hdr.pack(fill="x")
+        self.all_var = tk.BooleanVar(value=all(rnd_saved.get(k, True) for k, *_ in core.ADJUSTS))
+        ttk.Checkbutton(hdr, text="랜덤", variable=self.all_var, command=self._toggle_all).pack(side="left")
+        ttk.Label(hdr, text="← 체크한 항목만 랜덤 때 바뀜", foreground=GRAY).pack(side="left", padx=4)
         for k, name, lo, hi in core.ADJUSTS:
             row = ttk.Frame(sf.inner)
             row.pack(fill="x", pady=1)
-            ttk.Label(row, text=name, width=15).pack(side="left")
+            rv = tk.BooleanVar(value=rnd_saved.get(k, True))
+            ttk.Checkbutton(row, variable=rv, command=self._save).pack(side="left")
+            ttk.Label(row, text=name, width=12).pack(side="left")
             v = tk.DoubleVar(value=float(saved.get(k, 0) or 0))
             sc = tk.Scale(row, from_=lo, to=hi, resolution=0.1, orient="horizontal", variable=v,
-                          showvalue=True, length=170, sliderlength=14, width=10, bd=0,
+                          showvalue=True, length=120, sliderlength=12, width=9, bd=0,
                           highlightthickness=0, font=("맑은 고딕", 8),
                           command=lambda _x: self._changed())
             sc.pack(side="left", fill="x", expand=True)
             sc.bind("<Double-Button-1>", lambda e, var=v: (var.set(0), self._changed()))
             self.vars[k] = v
+            self.rnd[k] = rv
         ttk.Label(sf.inner, text="바를 더블클릭하면 0으로 돌아갑니다.", foreground=GRAY).pack(anchor="w", pady=(4, 0))
 
     def get(self):
@@ -197,15 +210,139 @@ class AdjustPanel(ttk.Frame):
     def reset(self):
         self.set({})
 
-    def is_zero(self):
-        return not any(self.get().values())
+    def randomize(self, rng):
+        """체크된 항목만 아주 약한 값으로"""
+        keys = [k for k, rv in self.rnd.items() if rv.get()]
+        vals = core.random_adjust(rng, keys)
+        cur = self.get()
+        cur.update(vals)
+        self.set(cur)
+
+    def _toggle_all(self):
+        for rv in self.rnd.values():
+            rv.set(self.all_var.get())
+        self._save()
+
+    def _save(self):
+        self.app.settings[self.key] = self.get()
+        self.app.settings[self.key + "_rnd"] = {k: rv.get() for k, rv in self.rnd.items()}
 
     def _changed(self):
-        self.app.settings[self.key] = self.get()
+        self._save()
         if self.on_change:
             if self._job:
                 self.after_cancel(self._job)
             self._job = self.after(250, self.on_change)
+
+
+PANES = []   # 저장할 폭 조절 영역들
+
+
+class Paned(tk.PanedWindow):
+    """눈에 보이는 폭 조절바(회색 굵은 막대 + 손잡이)가 있는 분할 영역. 위치는 자동 저장"""
+
+    def __init__(self, master, app, key, orient="horizontal"):
+        super().__init__(master, orient=orient, sashwidth=9, sashrelief="raised", sashpad=1,
+                         showhandle=True, handlesize=14, handlepad=60, bg="#b9c3cf", bd=0,
+                         opaqueresize=True, sashcursor="sb_h_double_arrow" if orient == "horizontal" else "sb_v_double_arrow")
+        self.app = app
+        self.key = key
+        PANES.append(self)
+        self._restored = False
+        self.bind("<Map>", lambda e: self.after(150, self._restore))
+
+    def add(self, child, weight=1, width=None, height=None, minsize=120):
+        opts = {"minsize": minsize, "stretch": "always" if weight else "never"}
+        if width:
+            opts["width"] = width
+        if height:
+            opts["height"] = height
+        super().add(child, **opts)
+
+    def _restore(self):
+        if self._restored:
+            return
+        self._restored = True
+        pos = self.app.settings.get("panes", {}).get(self.key)
+        if not pos:
+            return
+        for i, p in enumerate(pos):
+            try:
+                if self.cget("orient") == "horizontal":
+                    self.sash_place(i, int(p), 1)
+                else:
+                    self.sash_place(i, 1, int(p))
+            except Exception:
+                pass
+
+    def remember(self):
+        if not self._restored:
+            return
+        try:
+            n = len(self.panes()) - 1
+            i = 0 if self.cget("orient") == "horizontal" else 1
+            self.app.settings.setdefault("panes", {})[self.key] = [self.sash_coord(j)[i] for j in range(n)]
+        except Exception:
+            pass
+
+
+class RandomRangeDialog(tk.Toplevel):
+    """랜덤 버튼이 고를 범위(긴 변·테두리·비율)와 포함 여부"""
+
+    def __init__(self, parent, app, key, default):
+        super().__init__(parent)
+        self.app = app
+        self.key = key
+        self.title("랜덤 범위")
+        self.transient(parent.winfo_toplevel())
+        self.resizable(False, False)
+        cfg = dict(default)
+        cfg.update(app.settings.get(key, {}))
+        use = cfg.get("use", {"len": True, "trim": True, "aspect": True})
+        f = ttk.Frame(self, padding=16)
+        f.pack()
+        ttk.Label(f, text="'랜덤'을 누르면 아래 범위 안에서 값이 정해집니다.", foreground=GRAY).grid(
+            row=0, column=0, columnspan=5, sticky="w", pady=(0, 10))
+        self.v = {}
+        rows = (("len", "긴 변 크기 (px)", 1, 50, 6000), ("trim", "테두리 자르기 (px)", 1, 0, 200),
+                ("aspect", "가로·세로 비율 흔들림 (%)", 0.1, 0, 30))
+        for r, (k, name, inc, lo, hi) in enumerate(rows, start=1):
+            u = tk.BooleanVar(value=use.get(k, True))
+            ttk.Checkbutton(f, variable=u).grid(row=r, column=0, sticky="w")
+            ttk.Label(f, text=name, width=22).grid(row=r, column=1, sticky="w", pady=4)
+            a = tk.DoubleVar(value=cfg[k][0])
+            b = tk.DoubleVar(value=cfg[k][1])
+            ttk.Spinbox(f, from_=lo, to=hi, increment=inc, textvariable=a, width=7).grid(row=r, column=2)
+            ttk.Label(f, text="~").grid(row=r, column=3, padx=4)
+            ttk.Spinbox(f, from_=lo, to=hi, increment=inc, textvariable=b, width=7).grid(row=r, column=4)
+            self.v[k] = (u, a, b)
+        ttk.Label(f, text="왼쪽 체크를 끄면 그 항목은 랜덤 때 그대로 둡니다.", foreground=GRAY).grid(
+            row=5, column=0, columnspan=5, sticky="w", pady=(10, 0))
+        bar = ttk.Frame(f)
+        bar.grid(row=6, column=0, columnspan=5, sticky="e", pady=(12, 0))
+        ttk.Button(bar, text="처음값", command=lambda: self._fill(default)).pack(side="left")
+        ttk.Button(bar, text="저장", command=self._ok).pack(side="left", padx=6)
+        ttk.Button(bar, text="취소", command=self.destroy).pack(side="left")
+        self.grab_set()
+
+    def _fill(self, d):
+        for k, (u, a, b) in self.v.items():
+            u.set(True)
+            a.set(d[k][0])
+            b.set(d[k][1])
+
+    def _ok(self):
+        try:
+            out = {"use": {}}
+            for k, (u, a, b) in self.v.items():
+                lo, hi = sorted((float(a.get()), float(b.get())))
+                out[k] = [int(lo), int(hi)] if k != "aspect" else [round(lo, 1), round(hi, 1)]
+                out["use"][k] = bool(u.get())
+        except Exception:
+            messagebox.showwarning("랜덤 범위", "숫자를 확인해주세요.", parent=self)
+            return
+        self.app.settings[self.key] = out
+        self.destroy()
 
 
 class Preview(ttk.Frame):

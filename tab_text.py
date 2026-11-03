@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 
 import core
-from common import (GRAY, FONT_B, text_box, copy_to_clipboard, enable_drop, drop_hint, read_text_file)
+from common import (GRAY, FONT_B, text_box, copy_to_clipboard, enable_drop, drop_hint, read_text_file, Paned)
 
 
 class TextTab(ttk.Frame):
@@ -42,7 +42,7 @@ class TextTab(ttk.Frame):
                   foreground=GRAY).pack(side="left")
         ttk.Button(bar, text="결과 복사", command=lambda: self._copy(self.rank_out)).pack(side="right")
         ttk.Button(bar, text="지우기", command=lambda: self.rank_in.delete("1.0", "end")).pack(side="right", padx=4)
-        body = ttk.PanedWindow(f, orient="horizontal")
+        body = Paned(f, self.app, "text_report")
         body.pack(fill="both", expand=True, pady=(6, 0))
         lf, self.rank_in = text_box(body)
         rf, self.rank_out = text_box(body)
@@ -73,15 +73,15 @@ class TextTab(ttk.Frame):
         ttk.Label(opt, text="한 줄 글자수").pack(side="left")
         self.wrap_w = tk.IntVar(value=self.app.settings.get("wrap_width", 20))
         ttk.Spinbox(opt, from_=8, to=80, textvariable=self.wrap_w, width=5).pack(side="left", padx=(4, 12))
-        self.wrap_first = tk.BooleanVar(value=True)
+        self.wrap_first = tk.BooleanVar(value=self.app.settings.get("wrap_first", True))
         ttk.Checkbutton(opt, text="문단 첫 문장은 한 줄 유지", variable=self.wrap_first).pack(side="left", padx=4)
-        self.wrap_sent = tk.BooleanVar(value=False)
+        self.wrap_sent = tk.BooleanVar(value=self.app.settings.get("wrap_sent", False))
         ttk.Checkbutton(opt, text="문장마다 빈 줄", variable=self.wrap_sent).pack(side="left", padx=4)
         ttk.Button(opt, text="정리하기 ▶", command=self._do_wrap).pack(side="left", padx=12)
         ttk.Button(opt, text="결과 복사", command=lambda: self._copy(self.wrap_out)).pack(side="left")
         ttk.Label(f, text="'-', '#', '[' 로 시작하는 줄(요약·소제목·이미지 표시)은 그대로 둡니다.",
                   foreground=GRAY).pack(anchor="w", pady=(6, 0))
-        body = ttk.PanedWindow(f, orient="horizontal")
+        body = Paned(f, self.app, "text_wrap")
         body.pack(fill="both", expand=True, pady=(6, 0))
         lf, self.wrap_in = text_box(body)
         rf, self.wrap_out = text_box(body)
@@ -103,6 +103,15 @@ class TextTab(ttk.Frame):
         self.wrap_out.insert("1.0", res)
         s = core.count_stats(res, [])
         self.wrap_info.config(text=f"결과  공백 제외 {s['no_space']:,}자 · 문단 {s['paragraphs']}개")
+
+    def remember(self):
+        try:
+            self.app.settings["wrap_width"] = int(self.wrap_w.get())
+            self.app.settings["wrap_first"] = self.wrap_first.get()
+            self.app.settings["wrap_sent"] = self.wrap_sent.get()
+            self.app.settings["forbidden"] = self.check.forbid.get()
+        except Exception:
+            pass
 
     def _copy(self, box):
         copy_to_clipboard(self.app.root, box.get("1.0", "end-1c"))
@@ -136,7 +145,7 @@ class CheckPanel(ttk.Frame):
                          ("선택 삭제", self.remove_sel), ("폴더 추가", self.add_folder), ("파일 추가", self.add_files)):
             ttk.Button(bar, text=txt, command=cmd).pack(side="right", padx=2)
 
-        pw = ttk.PanedWindow(self, orient="vertical")
+        pw = Paned(self, app, "text_check", orient="vertical")
         pw.pack(fill="both", expand=True)
 
         tf = ttk.Frame(pw)
@@ -152,7 +161,7 @@ class CheckPanel(ttk.Frame):
         self.tree.tag_configure("nokw", background="#fff6d6")
         self.tree.bind("<Double-1>", self._dbl)
         self.tree.bind("<<TreeviewSelect>>", lambda e: self._show_preview())
-        pw.add(tf, weight=3)
+        pw.add(tf, weight=1, height=330)
 
         pf = ttk.Frame(pw)
         kb = ttk.Frame(pf)
@@ -169,7 +178,7 @@ class CheckPanel(ttk.Frame):
         box.pack(fill="both", expand=True)
         self.preview.tag_configure("kw", background="#d6e8ff", foreground="#0645ad")
         self.preview.tag_configure("bad", background="#ffd0d0", foreground="#c00")
-        pw.add(pf, weight=2)
+        pw.add(pf, weight=1)
 
         self.summary = ttk.Label(self, text="")
         self.summary.pack(anchor="w", pady=(4, 0))

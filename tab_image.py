@@ -1,12 +1,13 @@
 """업무 도우미 - 이미지 관리 탭 (대량 크기·포맷·이름·색감)"""
 import os
 import queue
+import random
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import core
-from common import (APP_NAME, GRAY, FONT_B, enable_drop, drop_hint, open_folder, AdjustPanel, Preview)
+from common import (APP_NAME, GRAY, FONT_B, enable_drop, drop_hint, open_folder, AdjustPanel, Preview, Paned)
 
 
 class ImageTab(ttk.Frame):
@@ -18,12 +19,12 @@ class ImageTab(ttk.Frame):
         self.q = queue.Queue()
         s = app.settings
 
-        body = ttk.PanedWindow(self, orient="horizontal")
+        body = Paned(self, app, "image_main")
         body.pack(fill="both", expand=True)
 
         # ── 왼쪽: 파일 목록 ──
         left = ttk.Frame(body)
-        body.add(left, weight=2)
+        body.add(left, weight=1, width=330, minsize=220)
         top = ttk.Frame(left)
         top.pack(fill="x")
         ttk.Button(top, text="파일 추가", command=self._add_files).pack(side="left")
@@ -54,13 +55,14 @@ class ImageTab(ttk.Frame):
 
         # ── 가운데: 색감 조절 ──
         mid = ttk.Frame(body, padding=(10, 0))
-        body.add(mid, weight=2)
+        body.add(mid, weight=0, width=330, minsize=240)
         mh = ttk.Frame(mid)
         mh.pack(fill="x")
         ttk.Label(mh, text="색감 조절", font=FONT_B).pack(side="left")
         self.adj_on = tk.BooleanVar(value=s.get("im_adj_on", False))
         ttk.Checkbutton(mh, text="적용", variable=self.adj_on).pack(side="left", padx=8)
-        ttk.Button(mh, text="모두 0으로", command=lambda: self.adjust.reset()).pack(side="right")
+        ttk.Button(mh, text="모두 0", command=lambda: self.adjust.reset()).pack(side="right")
+        ttk.Button(mh, text="랜덤", command=lambda: (self.adjust.randomize(random.Random()), self.adj_on.set(True))).pack(side="right", padx=3)
         self.preview = Preview(mid, height=140)
         self.preview.pack(fill="x", pady=6)
         ttk.Label(mid, text="왼쪽: 원본  ·  오른쪽: 조절 결과", foreground=GRAY).pack(anchor="w")
@@ -69,7 +71,7 @@ class ImageTab(ttk.Frame):
 
         # ── 오른쪽: 파일 설정 ──
         opt = ttk.Frame(body, padding=(10, 0))
-        body.add(opt, weight=2)
+        body.add(opt, weight=1, minsize=260)
 
         g1 = ttk.LabelFrame(opt, text=" 크기 조절·압축 ", padding=8)
         g1.pack(fill="x")
@@ -216,7 +218,7 @@ class ImageTab(ttk.Frame):
                 "pattern": self.pattern.get(), "digits": int(self.digits.get()),
                 "adjust": self.adjust.get() if self.adj_on.get() else {}}
 
-    def _remember(self):
+    def remember(self):
         s = self.app.settings
         try:
             s.update(rs_on=self.rs_on.get(), rs_mode=self.rs_mode.get(), rs_val=int(self.rs_val.get()),
@@ -244,7 +246,7 @@ class ImageTab(ttk.Frame):
         if custom and not out:
             messagebox.showinfo(APP_NAME, "저장할 폴더를 지정해주세요.")
             return
-        self._remember()
+        self.remember()
         files = list(self.files)
         self.prog.config(maximum=len(files), value=0)
         self.run_btn.config(state="disabled")

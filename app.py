@@ -1,16 +1,19 @@
 """업무 도우미 - 메인 창 · 설정"""
 import os
 import sys
+import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 
 import core
-from common import (APP_NAME, FONT, FONT_B, GRAY, TkinterDnD, known_folder, load_settings, save_settings)
+import json
+import updater
+from common import (APP_NAME, FONT, FONT_B, GRAY, TkinterDnD, PANES, known_folder, load_settings, save_settings)
+from version import VERSION
 from tab_text import TextTab
 from tab_image import ImageTab
 from tab_library import LibraryTab
 
-VERSION = "1.2.0"
 
 
 class App:
@@ -51,12 +54,57 @@ class App:
         except Exception:
             pass
 
-        # 오른쪽 위 설정 버튼
-        ttk.Button(root, text="⚙ 설정", command=self.open_settings).place(relx=1.0, x=-12, y=8, anchor="ne")
+        # 오른쪽 위: 업데이트 확인 · 설정
+        top = ttk.Frame(root)
+        top.place(relx=1.0, x=-12, y=6, anchor="ne")
+        self.upd_btn = ttk.Button(top, text="업데이트 확인", command=self.open_update)
+        self.upd_btn.pack(side="left", padx=4)
+        ttk.Button(top, text="⚙ 설정", command=self.open_settings).pack(side="left")
 
         self.status_lbl = ttk.Label(root, text="준비", anchor="w", padding=(10, 4))
         self.status_lbl.pack(fill="x")
         root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._last_saved = ""
+        root.after(3000, self._autosave)
+        threading.Thread(target=self._quiet_check, daemon=True).start()
+
+    # ── 설정 자동 저장 (2초마다 바뀐 게 있으면) ──
+    def collect(self):
+        for t in (self.text_tab, self.image_tab, self.cap_tab, self.thumb_tab):
+            try:
+                t.remember()
+            except Exception:
+                pass
+        for p in PANES:
+            p.remember()
+        self.settings["geometry"] = self.root.geometry()
+        try:
+            self.settings["tab"] = self.nb.index(self.nb.select())
+        except Exception:
+            pass
+
+    def _autosave(self):
+        try:
+            self.collect()
+            snap = json.dumps(self.settings, ensure_ascii=False, sort_keys=True)
+            if snap != self._last_saved:
+                save_settings(self.settings)
+                self._last_saved = snap
+        except Exception:
+            pass
+        self.root.after(2000, self._autosave)
+
+    # ── 업데이트 ──
+    def _quiet_check(self):
+        try:
+            info = updater.latest_release(timeout=8)
+            if updater.is_newer(info["tag"], VERSION):
+                self.root.after(0, lambda: self.upd_btn.config(text=f"새 버전 {info['tag']} 있음!"))
+        except Exception:
+            pass
+
+    def open_update(self):
+        UpdateDialog(self)
 
     def apply_layout(self):
         s = self.settings
@@ -78,15 +126,7 @@ class App:
         self.status_lbl.config(text=msg)
 
     def on_close(self):
-        try:
-            self.image_tab._remember()
-        except Exception:
-            pass
-        self.settings["geometry"] = self.root.geometry()
-        try:
-            self.settings["tab"] = self.nb.index(self.nb.select())
-        except Exception:
-            pass
+        self.collect()
         save_settings(self.settings)
         self.root.destroy()
 
@@ -197,9 +237,115 @@ class SettingsDialog(tk.Toplevel):
         self.app.status("탭 설정을 적용했습니다.")
 
 
+class UpdateDialog(tk.Toplevel):
+    """새 버전 확인 → 있으면 바로 내려받아 교체 후 다시 시작"""
+
+    def __init__(self, app):
+        super().__init__(app.root)
+        self.app = app
+        self.title("업데이트 확인")
+        self.transient(app.root)
+        self.resizable(False, False)
+        f = ttk.Frame(self, padding=18)
+        f.pack(fill="both", expand=True)
+        ttk.Label(f, text=f"지금 버전: {VERSION}", font=FONT_B).pack(anchor="w")
+        self.msg = ttk.Label(f, text="새 버전을 확인하는 중...", wraplength=380, justify="left")
+        self.msg.pack(anchor="w", pady=(10, 6))
+        self.prog = ttk.Progressbar(f, mode="indeterminate", length=380)
+        self.prog.pack(fill="x")
+        self.prog.start(12)
+        self.notes = tk.Text(f, height=7, width=52, wrap="word", font=("맑은 고딕", 9), relief="solid", bd=1)
+        self.btns = ttk.Frame(f)
+        self.btns.pack(fill="x", pady=(12, 0))
+        self.close_btn = ttk.Button(self.btns, text="닫기", command=self.destroy)
+        self.close_btn.pack(side="right")
+        self.q = []
+        threading.Thread(target=self._check, daemon=True).start()
+        self.after(100, self._poll)
+
+    def _post(self, *m):
+        self.q.append(m)
+
+    def _check(self):
+        try:
+            info = updater.latest_release()
+        except Exception as e:
+            self._post("err", f"새 버전을 확인하지 못했습니다. 인터넷 연결을 확인해주세요.\n({e})")
+            return
+        if not updater.is_newer(info["tag"], VERSION):
+            self._post("latest", f"최신 버전을 쓰고 있습니다. ({info['tag'] or VERSION})")
+            return
+        if not info["url"]:
+            self._post("err", f"새 버전 {info['tag']}이 있지만 내려받을 파일이 아직 준비되지 않았습니다.")
+            return
+        self._post("found", info)
+        if not updater.is_frozen():
+            self._post("err", "개발용 실행이라 자동 적용은 건너뜁니다.")
+            return
+        try:
+            z = updater.download(info["url"], lambda g, t: self._post("prog", g, t or info["size"]))
+            self._post("msg", "압축 푸는 중...")
+            new_dir = updater.extract(z)
+            self._post("apply", new_dir)
+        except Exception as e:
+            self._post("err", f"업데이트 중 문제가 생겼습니다.\n{e}")
+
+    def _poll(self):
+        while self.q:
+            m = self.q.pop(0)
+            kind = m[0]
+            if kind in ("err", "latest"):
+                self.prog.stop()
+                self.prog.config(mode="determinate", value=100 if kind == "latest" else 0)
+                self.msg.config(text=m[1])
+                if kind == "latest":
+                    self.app.upd_btn.config(text="업데이트 확인")
+            elif kind == "found":
+                info = m[1]
+                self.msg.config(text=f"새 버전 {info['tag']}이 있습니다. 자동으로 내려받아 적용합니다.")
+                if info["notes"].strip():
+                    self.notes.insert("1.0", "바뀐 점\n" + info["notes"].strip())
+                    self.notes.config(state="disabled")
+                    self.notes.pack(fill="x", pady=(8, 0), before=self.btns)
+                self.prog.stop()
+                self.prog.config(mode="determinate", value=0, maximum=100)
+            elif kind == "prog":
+                g, t = m[1], m[2]
+                if t:
+                    self.prog.config(value=g * 100 / t)
+                    self.msg.config(text=f"내려받는 중... {g / 1048576:.1f} / {t / 1048576:.1f} MB")
+            elif kind == "msg":
+                self.msg.config(text=m[1])
+            elif kind == "apply":
+                self.msg.config(text="새 버전으로 바꾸고 다시 시작합니다...")
+                self.update()
+                try:
+                    updater.launch_apply(m[1])
+                except Exception as e:
+                    self.msg.config(text=f"새 버전을 실행하지 못했습니다.\n{e}")
+                    return
+                self.app.on_close()
+                return
+        if self.winfo_exists():
+            self.after(100, self._poll)
+
+
 def main():
+    # 새 버전 쪽: 설치 폴더에 덮어쓰고 다시 실행한 뒤 종료
+    if "--apply-update" in sys.argv:
+        ok, msg = updater.apply_update(sys.argv)
+        if not ok:
+            r = tk.Tk()
+            r.withdraw()
+            messagebox.showerror(APP_NAME, msg + "\n\n프로그램 폴더를 바탕화면·문서 같은 곳으로 옮긴 뒤 다시 해주세요.")
+            r.destroy()
+            sys.exit(1)
+        return
     root = TkinterDnD.Tk() if TkinterDnD else tk.Tk()
     app = App(root)
+    if "--updated" in sys.argv:
+        threading.Thread(target=updater.cleanup_later, daemon=True).start()
+        app.status(f"{VERSION} 버전으로 업데이트했습니다.")
     if "--selftest" in sys.argv:
         try:
             sys.stdout.reconfigure(encoding="utf-8")
@@ -264,6 +410,10 @@ def main():
             print("grid tiles:", len(cap.tiles), "sel:", [os.path.basename(x) for x in cap.sel], flush=True)
             cap._randomize()
             kw = cap._params()
+            print("random:", kw["lmin"], kw["lmax"], kw["tmin"], kw["tmax"], kw["aspect"], "micro", kw["micro"], flush=True)
+            app.collect()
+            print("saved keys:", sorted(k for k in app.settings if k.startswith(("img_", "panes", "im_")))[:12], flush=True)
+            print("update check:", updater.latest_release().get("tag"), "ver", VERSION, flush=True)
             rng = random.Random()
             for _ in range(2):
                 top = core.next_numbered_dir(tmp, cap._out_base(cap.sel[0]))

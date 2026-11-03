@@ -368,23 +368,47 @@ def _r1(x):
     return round(x, 1)
 
 
-def random_base(rng):
-    """'랜덤' 버튼: 아주 약한 값들을 무작위로"""
-    def pm(a):
-        return _r1(rng.uniform(-a, a))
+# 랜덤 버튼 세기: (키 → (최대 변화량, 바뀔 확률))  아주 약하게
+RANDOM_AMP = {
+    "brightness": (2, 1), "contrast": (2, 1), "saturation": (3, 1), "gamma": (3, 1),
+    "highlights": (4, 1), "shadows": (4, 1), "temperature": (3, 1), "tint": (2, 1),
+    "hue": (1, 1), "red": (1.5, 1), "green": (1.5, 1), "blue": (1.5, 1),
+    "sharpness": (10, 1), "blur": (3, 0.3), "noise": (3, 0.3), "vignette": (6, 0.4),
+}
+ONE_SIDED = {"blur", "noise", "vignette"}
 
-    def maybe(a, prob):
-        return _r1(rng.uniform(0, a)) if rng.random() < prob else 0.0
-    vals = {
-        "brightness": pm(2), "contrast": pm(2), "saturation": pm(3), "gamma": pm(3),
-        "highlights": pm(4), "shadows": pm(4), "temperature": pm(3), "tint": pm(2),
-        "hue": pm(1), "red": pm(1.5), "green": pm(1.5), "blue": pm(1.5),
-        "sharpness": pm(10), "blur": maybe(3, 0.3), "noise": maybe(3, 0.3), "vignette": maybe(6, 0.4),
-    }
-    lmin = rng.randint(76, 86) * 10
-    size = {"lmin": lmin, "lmax": lmin + rng.randint(4, 12) * 10,
-            "tmin": rng.randint(2, 4), "tmax": rng.randint(5, 12), "aspect": _r1(rng.uniform(2, 6))}
-    return vals, size
+DEFAULT_RANDOM_RANGE = {
+    "image": {"len": [760, 940], "trim": [2, 12], "aspect": [2.0, 6.0]},
+    "thumb": {"len": [720, 980], "trim": [2, 12], "aspect": [2.0, 6.0]},
+}
+
+
+def random_adjust(rng, keys):
+    """체크된 색감 항목만 아주 약한 값으로 무작위"""
+    out = {}
+    for k in keys:
+        amp, prob = RANDOM_AMP.get(k, (1, 1))
+        if rng.random() > prob:
+            out[k] = 0.0
+        elif k in ONE_SIDED:
+            out[k] = _r1(rng.uniform(0, amp))
+        else:
+            out[k] = _r1(rng.uniform(-amp, amp))
+    return out
+
+
+def random_size(rng, cfg):
+    """긴 변(1px 단위)·테두리·비율 흔들림을 cfg 범위 안에서 무작위.
+    cfg = {"len":[최소,최대], "trim":[최소,최대], "aspect":[최소,최대]}"""
+    a, b = sorted(int(x) for x in cfg["len"])
+    span = b - a
+    lmin = rng.randint(a, a + span // 2)
+    lmax = rng.randint(min(b, lmin + max(1, span // 10)), b) if span else a
+    ta, tb = sorted(int(x) for x in cfg["trim"])
+    tmin = rng.randint(ta, ta + (tb - ta) // 2)
+    tmax = rng.randint(tmin, tb)
+    aa, ab = sorted(float(x) for x in cfg["aspect"])
+    return {"lmin": lmin, "lmax": lmax, "tmin": tmin, "tmax": tmax, "aspect": _r1(rng.uniform(aa, ab))}
 
 
 def micro_jitter(rng):

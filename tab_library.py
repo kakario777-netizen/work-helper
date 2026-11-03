@@ -11,7 +11,7 @@ from tkinter import ttk, filedialog, messagebox
 
 import core
 from common import (APP_NAME, GRAY, FONT, FONT_B, known_folder, enable_drop, drop_hint, open_folder,
-                    ScrollFrame, AdjustPanel, Preview)
+                    ScrollFrame, AdjustPanel, Preview, Paned, RandomRangeDialog)
 
 META = "_정보.json"
 TILE_W = 160
@@ -39,12 +39,12 @@ class LibraryTab(ttk.Frame):
         self._cols = 0
         s = app.settings
 
-        body = ttk.PanedWindow(self, orient="horizontal")
+        body = Paned(self, app, f"{self.k}_main")
         body.pack(fill="both", expand=True)
 
         # ══ 왼쪽: 보관 목록 (그리드 / 리스트) ══
         left = ttk.Frame(body)
-        body.add(left, weight=3)
+        body.add(left, weight=1, width=360, minsize=220)
         lh = ttk.Frame(left)
         lh.pack(fill="x")
         what = "병원·시술별 이미지 폴더" if self.is_img else "병원별 썸네일 폴더"
@@ -85,12 +85,12 @@ class LibraryTab(ttk.Frame):
 
         # ══ 가운데: 랜덤 · 크기 · 색감 ══
         mid = ttk.Frame(body, padding=(10, 0))
-        body.add(mid, weight=3)
+        body.add(mid, weight=0, width=340, minsize=260)
         mh = ttk.Frame(mid)
         mh.pack(fill="x")
         ttk.Button(mh, text="  랜덤  ", command=self._randomize).pack(side="left")
-        ttk.Label(mh, text="아주 약한 값으로 전부 무작위", foreground=GRAY).pack(side="left", padx=6)
-        ttk.Button(mh, text="모두 0으로", command=self._reset).pack(side="right")
+        ttk.Button(mh, text="랜덤 범위…", command=self._range_dialog).pack(side="left", padx=4)
+        ttk.Button(mh, text="모두 0", command=self._reset).pack(side="right")
 
         self.preview = Preview(mid, height=120)
         self.preview.pack(fill="x", pady=6)
@@ -103,7 +103,7 @@ class LibraryTab(ttk.Frame):
         self.tmin = tk.IntVar(value=s.get(f"{self.k}_tmin", 2))
         self.tmax = tk.IntVar(value=s.get(f"{self.k}_tmax", 8))
         self.aspect = tk.DoubleVar(value=s.get(f"{self.k}_aspect", 3.0))
-        self.micro = tk.BooleanVar(value=s.get(f"{self.k}_micro", True))
+        self.micro = tk.BooleanVar(value=s.get(f"{self.k}_micro", False))
         self._range_row(g, 0, "긴 변 크기(px)", self.lmin, self.lmax, 100, 5000)
         self._range_row(g, 1, "테두리 자르기(px)", self.tmin, self.tmax, 0, 60)
         ttk.Label(g, text="가로·세로 비율 흔들림(%)").grid(row=2, column=0, sticky="w", pady=2)
@@ -119,7 +119,7 @@ class LibraryTab(ttk.Frame):
 
         # ══ 오른쪽: 이름 · 만들기 ══
         right = ttk.Frame(body, padding=(10, 0))
-        body.add(right, weight=2)
+        body.add(right, weight=1, minsize=240)
         g1 = ttk.LabelFrame(right, text=" 선택한 항목 ", padding=8)
         g1.pack(fill="x")
         self.h_var = tk.StringVar()
@@ -412,14 +412,41 @@ class LibraryTab(ttk.Frame):
         self.reload(select=d)
 
     # ══ 랜덤 · 미리보기 ══
+    def _range_cfg(self):
+        d = core.DEFAULT_RANDOM_RANGE["image" if self.is_img else "thumb"]
+        cfg = {k: list(v) for k, v in d.items()}
+        cfg.update(self.app.settings.get(f"{self.k}_rrange", {}))
+        return d, cfg
+
+    def _range_dialog(self):
+        d, _ = self._range_cfg()
+        RandomRangeDialog(self, self.app, f"{self.k}_rrange", d)
+
     def _randomize(self):
-        vals, size = core.random_base(random.Random())
-        self.adjust.set(vals)
-        self.lmin.set(size["lmin"] if self.is_img else size["lmin"] - 30)
-        self.lmax.set(size["lmax"] if self.is_img else size["lmax"] + 30)
-        self.tmin.set(size["tmin"])
-        self.tmax.set(size["tmax"])
-        self.aspect.set(size["aspect"])
+        rng = random.Random()
+        self.adjust.randomize(rng)
+        _, cfg = self._range_cfg()
+        use = cfg.get("use", {})
+        size = core.random_size(rng, cfg)
+        if use.get("len", True):
+            self.lmin.set(size["lmin"])
+            self.lmax.set(size["lmax"])
+        if use.get("trim", True):
+            self.tmin.set(size["tmin"])
+            self.tmax.set(size["tmax"])
+        if use.get("aspect", True):
+            self.aspect.set(size["aspect"])
+        self.remember()
+
+    def remember(self):
+        try:
+            self.app.settings.update({
+                f"{self.k}_count": int(self.count.get()), f"{self.k}_min": int(self.lmin.get()),
+                f"{self.k}_max": int(self.lmax.get()), f"{self.k}_tmin": int(self.tmin.get()),
+                f"{self.k}_tmax": int(self.tmax.get()), f"{self.k}_aspect": float(self.aspect.get()),
+                f"{self.k}_micro": self.micro.get(), f"{self.k}_view": self.view.get()})
+        except Exception:
+            pass
 
     def _reset(self):
         self.adjust.reset()
@@ -449,9 +476,7 @@ class LibraryTab(ttk.Frame):
         except Exception:
             messagebox.showwarning(APP_NAME, "숫자 칸을 확인해주세요.")
             return
-        self.app.settings.update({f"{self.k}_count": count, f"{self.k}_min": kw["lmin"], f"{self.k}_max": kw["lmax"],
-                                  f"{self.k}_tmin": kw["tmin"], f"{self.k}_tmax": kw["tmax"],
-                                  f"{self.k}_aspect": kw["aspect"], f"{self.k}_micro": kw["micro"]})
+        self.remember()
         jobs = [(d, core.list_images(d)) for d in self.sel]
         jobs = [(d, f) for d, f in jobs if f]
         if not jobs:
