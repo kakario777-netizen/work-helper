@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import core
-from common import (APP_NAME, GRAY, FONT_B, enable_drop, drop_hint, open_folder, AdjustPanel, Preview, Paned, ScrollFrame, SizeCropPanel, RandomRangeDialog, WrapLabel)
+from common import (APP_NAME, GRAY, FONT_B, enable_drop, drop_hint, open_folder, AdjustPanel, Preview, Paned, ScrollFrame, SizeCropPanel, RandomRangeDialog, WrapLabel, help_label)
 
 
 class ImageTab(ttk.Frame):
@@ -33,7 +33,8 @@ class ImageTab(ttk.Frame):
         ttk.Checkbutton(top, text="하위 폴더", variable=self.sub_var).pack(side="left")
         self.count_lbl = ttk.Label(top, text="0개")
         self.count_lbl.pack(side="right")
-        ttk.Label(left, text=f"이미지·폴더를 {drop_hint()}버튼으로 추가", foreground=GRAY).pack(anchor="w", pady=(4, 0))
+        help_label(left, f"이미지 파일이나 폴더를 {drop_hint()}버튼으로 추가하세요.\n"
+                         "폴더를 여러 개 한꺼번에 넣어도 됩니다.").pack(anchor="w", pady=(4, 0))
         lf = ttk.Frame(left)
         lf.pack(fill="both", expand=True, pady=4)
         self.tree = ttk.Treeview(lf, columns=("name", "size"), show="headings", selectmode="extended")
@@ -62,8 +63,11 @@ class ImageTab(ttk.Frame):
         ttk.Button(mh, text="랜덤 범위…", command=self._range_dialog).pack(side="left", padx=4)
         ttk.Button(mh, text="모두 0", command=lambda: self.adjust.reset()).pack(side="right")
         self.per_folder = tk.BooleanVar(value=s.get("im_per_folder", False))
-        ttk.Checkbutton(mid, text="폴더별 각각 랜덤 (폴더마다 새 랜덤값, 한 폴더 안은 같은 값)",
-                        variable=self.per_folder).pack(anchor="w", pady=(6, 0))
+        pf = ttk.Frame(mid)
+        pf.pack(fill="x", pady=(6, 0))
+        ttk.Checkbutton(pf, text="폴더별 각각 랜덤", variable=self.per_folder).pack(side="left")
+        help_label(pf, "폴더를 여러 개 넣었을 때 폴더마다 '랜덤'을 새로 누른 것처럼 색감·크기 값이 정해집니다.\n"
+                       "한 폴더 안의 이미지는 모두 같은 값입니다.").pack(side="left", padx=6)
         msf = ScrollFrame(mid)
         msf.pack(fill="both", expand=True, pady=(6, 0))
         m = ttk.Frame(msf.inner, padding=(0, 0, 8, 0))
@@ -108,7 +112,9 @@ class ImageTab(ttk.Frame):
         ttk.Label(g3, text="자릿수").grid(row=1, column=2, sticky="e", pady=(6, 0))
         self.digits = tk.IntVar(value=s.get("digits", 3))
         ttk.Spinbox(g3, from_=1, to=6, textvariable=self.digits, width=4).grid(row=1, column=3, sticky="w", padx=4, pady=(6, 0))
-        WrapLabel(g3, text="{이름} 원래 이름 · {번호} 순번 · {날짜} 오늘", foreground=GRAY).grid(
+        help_label(g3, "{이름} 원래 파일 이름 · {번호} 순번 · {날짜} 오늘 날짜\n"
+                       "예: image{번호} + 자릿수 3 → image001, image002 …\n\n"
+                       "번호는 폴더마다 따로 시작 번호부터 다시 셉니다.").grid(
             row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self.preview_lbl = ttk.Label(g3, text="", foreground="#0a5")
         self.preview_lbl.grid(row=3, column=0, columnspan=4, sticky="w")
@@ -130,7 +136,9 @@ class ImageTab(ttk.Frame):
         self.out_entry.pack(side="left", fill="x", expand=True)
         self.out_btn = ttk.Button(row, text="찾기", command=self._pick_out)
         self.out_btn.pack(side="left", padx=4)
-        ttk.Label(g4, text="원본 파일은 건드리지 않습니다.", foreground=GRAY).pack(anchor="w", pady=(4, 0))
+        help_label(g4, "기본: 각 원본 폴더 안에 'output' 폴더를 만들어 저장합니다.\n"
+                       "폴더를 여러 개 넣으면 폴더마다 자기 output 에 따로 저장됩니다.\n"
+                       "원본은 '원본 삭제'를 켜지 않는 한 그대로 둡니다.").pack(anchor="w", pady=(4, 0))
         self._mode_changed()
 
         self.run_btn = ttk.Button(opt, text="실행", style="Big.TButton", command=self._run)
@@ -326,12 +334,15 @@ class ImageTab(ttk.Frame):
             errors = []
             last_dir = None
             done_src = []
+            seq = {}   # 폴더마다 따로 번호를 셈
             for i, src in enumerate(files):
+                folder_key = os.path.normcase(os.path.dirname(src))
+                seq[folder_key] = seq.get(folder_key, -1) + 1
                 d = out if custom else os.path.join(os.path.dirname(src), "output")
                 try:
                     os.makedirs(d, exist_ok=True)
                     o = opts_for(os.path.dirname(src), rng) if per_folder else opts
-                    dst, b, a = core.process_image(src, d, start + i, o)
+                    dst, b, a = core.process_image(src, d, start + seq[folder_key], o)
                     before += b
                     after += a
                     ok += 1

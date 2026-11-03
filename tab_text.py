@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 
 import core
-from common import (GRAY, FONT_B, text_box, copy_to_clipboard, enable_drop, drop_hint, read_text_file, Paned)
+from common import (GRAY, FONT_B, text_box, copy_to_clipboard, enable_drop, drop_hint, read_text_file, Paned, help_label)
 
 
 class TextTab(ttk.Frame):
@@ -19,6 +19,7 @@ class TextTab(ttk.Frame):
         self.subs = {
             "check": (self.check, "원고 검사"),
             "report": (self._build_rank(nb), "보고서 정리"),
+            "nate": (self._build_nate(nb), "네이트온 보고서 정리"),
             "wrap": (self._build_wrap(nb), "줄바꿈 정리"),
         }
         self.apply_layout(app.settings.get("sub_order"), app.settings.get("sub_hidden"))
@@ -32,6 +33,47 @@ class TextTab(ttk.Frame):
         for k in shown:
             w, name = self.subs[k]
             self.nb.add(w, text=f"  {name}  ")
+
+    # ── 네이트온 보고서 정리 (링크·키워드 → 키워드<탭>링크) ──
+    def _build_nate(self, nb):
+        f = ttk.Frame(nb, padding=8)
+        bar = ttk.Frame(f)
+        bar.pack(fill="x")
+        ttk.Label(bar, text="네이트온 긁어서 삽입", font=FONT_B).pack(side="left")
+        help_label(bar, "네이트온 대화에서 링크와 키워드를 그대로 긁어 왼쪽에 붙여넣고 '변환 ▶'을 누르세요.\n"
+                        "링크 바로 뒤(같은 줄) 또는 그 다음 줄의 글자를 키워드로 봅니다.\n"
+                        "오른쪽 결과는 '키워드 [탭] 링크' 형태라 엑셀에 붙이면 두 칸으로 나뉩니다.\n"
+                        "결과도 직접 고칠 수 있어요.").pack(side="left", padx=8)
+        ttk.Label(bar, text="결과 (수정 가능)", font=FONT_B).pack(side="right")
+
+        body = ttk.Frame(f)
+        body.pack(fill="both", expand=True, pady=(6, 0))
+        lf, self.nate_in = text_box(body)
+        rf, self.nate_out = text_box(body)
+        self.nate_in.configure(wrap="none")
+        self.nate_out.configure(wrap="none", tabs=("200",))
+        mid = ttk.Frame(body, padding=8)
+        lf.pack(side="left", fill="both", expand=True)
+        mid.pack(side="left", fill="y")
+        rf.pack(side="left", fill="both", expand=True)
+        ttk.Button(mid, text="변환 ▶", style="Big.TButton", command=self._do_nate).pack(pady=(80, 10), ipady=4)
+        ttk.Button(mid, text="결과 복사", command=lambda: self._copy(self.nate_out)).pack(fill="x")
+        ttk.Button(mid, text="모두 지우기", command=self._clear_nate).pack(fill="x", pady=6)
+        self.nate_info = ttk.Label(f, text="", width=20, anchor="e")
+        self.nate_info.pack(anchor="e", pady=(4, 0))
+        return f
+
+    def _do_nate(self):
+        res = core.convert_nateon(self.nate_in.get("1.0", "end-1c"))
+        self.nate_out.delete("1.0", "end")
+        self.nate_out.insert("1.0", res)
+        n = len(res.splitlines()) if res else 0
+        self.nate_info.config(text=f"{n}줄 변환")
+
+    def _clear_nate(self):
+        self.nate_in.delete("1.0", "end")
+        self.nate_out.delete("1.0", "end")
+        self.nate_info.config(text="")
 
     # ── 보고서 정리(순위표 → 링크 [병원명] 키워드) ──
     def _build_rank(self, nb):

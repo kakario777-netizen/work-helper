@@ -1,4 +1,4 @@
-"""업무 도우미 - 이미지 캡쳐 / 썸네일 탭"""
+"""업무 도우미 - 이미지 생성 / 썸네일 생성 탭"""
 import json
 import os
 import queue
@@ -6,12 +6,13 @@ import random
 import re
 import shutil
 import threading
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import core
 from common import (APP_NAME, GRAY, FONT, FONT_B, known_folder, enable_drop, drop_hint, open_folder,
-                    ScrollFrame, AdjustPanel, Preview, Paned, RandomRangeDialog, SizeCropPanel, WrapLabel)
+                    ScrollFrame, AdjustPanel, Preview, Paned, RandomRangeDialog, SizeCropPanel, WrapLabel, help_label)
 
 META = "_정보.json"
 TILE_MIN = 130
@@ -48,7 +49,9 @@ class LibraryTab(ttk.Frame):
         lh = ttk.Frame(left)
         lh.pack(fill="x")
         what = "병원·시술별 이미지 폴더" if self.is_img else "병원별 썸네일 폴더"
-        ttk.Label(lh, text=f"{what}를 {drop_hint()}추가", foreground=GRAY).pack(side="left")
+        help_label(lh, f"{what}를 {drop_hint()}'폴더 추가'를 누르세요. 여러 개를 한 번에 넣어도 됩니다.\n"
+                       "칸을 클릭하면 선택, Ctrl+클릭으로 여러 개 선택.\n사진을 칸 위에 끌어다 놓으면 그 항목에 추가됩니다."
+                   ).pack(side="left")
         self.view = tk.StringVar(value=s.get(f"{self.k}_view", "grid"))
         ttk.Radiobutton(lh, text="리스트", value="list", variable=self.view, style="Toolbutton",
                         command=self._switch_view).pack(side="right")
@@ -108,6 +111,24 @@ class LibraryTab(ttk.Frame):
         # ══ 오른쪽: 이름 · 만들기 ══
         right = ttk.Frame(body, padding=(10, 0))
         body.add(right, weight=1, minsize=240)
+        if self.is_img:
+            gn = ttk.LabelFrame(right, text=" 파일명 ", padding=8)
+            gn.pack(fill="x", pady=(0, 10))
+            self.name_pat = tk.StringVar(value=s.get("img_name_pat", "{번호}"))
+            self.name_dig = tk.IntVar(value=s.get("img_name_dig", 1))
+            ttk.Entry(gn, textvariable=self.name_pat, width=16).grid(row=0, column=0, sticky="we")
+            ttk.Label(gn, text="자릿수").grid(row=0, column=1, padx=(8, 2))
+            ttk.Spinbox(gn, from_=1, to=6, textvariable=self.name_dig, width=4).grid(row=0, column=2)
+            self.name_ex = ttk.Label(gn, text="", foreground="#0a5")
+            self.name_ex.grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+            help_label(gn, "{번호} 자리에 1, 2, 3 … 이 들어갑니다. 자릿수만큼 앞에 0을 채워요.\n"
+                           "예: image{번호} + 자릿수 3 → image001.jpg, image002.jpg …\n"
+                           "{날짜} 는 오늘 날짜(20261103)로 바뀝니다.").grid(row=1, column=2, sticky="e", pady=(4, 0))
+            gn.columnconfigure(0, weight=1)
+            for v in (self.name_pat, self.name_dig):
+                v.trace_add("write", lambda *a: self._name_example())
+            self._name_example()
+
         g1 = ttk.LabelFrame(right, text=" 선택한 항목 ", padding=8)
         g1.pack(fill="x")
         self.h_var = tk.StringVar()
@@ -131,21 +152,24 @@ class LibraryTab(ttk.Frame):
         self.vary = tk.BooleanVar(value=s.get(f"{self.k}_vary", False))
         ttk.Checkbutton(g2, text=("폴더마다 다른 랜덤값" if self.is_img else "장마다 다른 랜덤값"),
                         variable=self.vary).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        hint = ("폴더 하나에 원본 이미지 전부가 한 장씩 같은 조건으로 변형되어 들어갑니다. "
+        hint = ("폴더 하나에 원본 이미지 전부가 한 장씩 같은 조건으로 변형되어 들어갑니다.\n"
                 "'폴더마다 다른 랜덤값'을 켜면 폴더를 만들 때마다 '랜덤'을 새로 누른 것처럼 "
-                "가로 크기·테두리·비율·색감이 바뀝니다. (한 폴더 안은 모두 같은 값)" if self.is_img
-                else "보관된 이미지에서 무작위로 골라 만듭니다. 이미지 수 이하로 요청하면 중복 없음. "
+                "가로 크기·테두리·비율·색감이 바뀝니다. (한 폴더 안은 모두 같은 값)\n\n"
+                "여러 항목을 선택(Ctrl+클릭)하면 항목마다 따로 만듭니다." if self.is_img
+                else "보관된 이미지에서 무작위로 골라 만듭니다. 이미지 수 이하로 요청하면 중복 없음.\n"
                      "'장마다 다른 랜덤값'을 켜면 한 장마다 '랜덤'을 새로 누른 것처럼 "
-                     "가로 크기·테두리·비율·색감이 바뀝니다. (끄면 전부 같은 조건)")
-        WrapLabel(g2, text=hint, foreground=GRAY).grid(row=2, column=0, columnspan=2, sticky="we", pady=(6, 0))
+                     "가로 크기·테두리·비율·색감이 바뀝니다. (끄면 전부 같은 조건)\n\n"
+                     "결과는 바탕화면에 '병원명 썸넬 1.jpg' 처럼 저장됩니다.")
+        help_label(g2, hint).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.where = WrapLabel(g2, text="", foreground="#0a5")
         self.where.grid(row=3, column=0, columnspan=2, sticky="we", pady=(8, 0))
         g2.columnconfigure(1, weight=1)
 
         self.run_btn = ttk.Button(right, text="선택 항목 만들기", style="Big.TButton", command=self._run)
         self.run_btn.pack(fill="x", ipady=4)
-        WrapLabel(right, text="여러 개 선택(Ctrl+클릭) 시 항목마다 따로 만듭니다.",
-                  foreground=GRAY).pack(fill="x", pady=(4, 8))
+        if self.is_img:
+            ttk.Button(right, text="키워드 생성하기", command=self._keyword_dialog).pack(fill="x", pady=(6, 0), ipady=2)
+        ttk.Frame(right, height=8).pack()
         self.prog = ttk.Progressbar(right, mode="determinate")
         self.prog.pack(fill="x")
         self.result = WrapLabel(right, text="")
@@ -166,9 +190,22 @@ class LibraryTab(ttk.Frame):
             m = {}
         return {"hospital": m.get("hospital", os.path.basename(d)), "procedure": m.get("procedure", "")}
 
-    def _write_meta(self, d, h, p):
+    def _meta_raw(self, d):
+        try:
+            with open(os.path.join(d, META), encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _write_meta(self, d, h=None, p=None, **extra):
+        m = self._meta_raw(d)
+        if h is not None:
+            m["hospital"] = h
+        if p is not None:
+            m["procedure"] = p
+        m.update(extra)
         with open(os.path.join(d, META), "w", encoding="utf-8") as f:
-            json.dump({"hospital": h, "procedure": p}, f, ensure_ascii=False)
+            json.dump(m, f, ensure_ascii=False, indent=1)
 
     def reload(self, select=None):
         self.groups = []
@@ -470,6 +507,51 @@ class LibraryTab(ttk.Frame):
         g = self.sizer.get()
         return {"width": g["width"], "trim": g["trim"], "aspect": g["aspect"], "base": self.adjust.get()}
 
+    def _fresh_factory(self, kw):
+        """'랜덤'을 새로 누른 것과 같은 값을 만드는 함수 (체크된 항목·범위 설정 그대로) — 한 묶음에 쓸 고정값"""
+        rnd_keys = [k for k, rv in self.adjust.rnd.items() if rv.get()]
+        _, cfg = self._range_cfg()
+
+        def fresh(rng):
+            k2 = dict(kw)
+            base = dict(kw["base"])
+            base.update(core.random_adjust(rng, rnd_keys))
+            k2["base"] = base
+            size = core.random_size(rng, cfg)
+            use = cfg.get("use", {})
+            for key, u in (("width", "len"), ("trim", "trim"), ("aspect", "aspect")):
+                if use.get(u, True):
+                    k2[key] = size[key]
+            return k2
+        return fresh
+
+    def _name_kw(self):
+        if not self.is_img:
+            return {}
+        try:
+            dig = int(self.name_dig.get())
+        except Exception:
+            dig = 1
+        return {"name_pattern": self.name_pat.get(), "digits": dig}
+
+    def _name_example(self):
+        try:
+            nk = self._name_kw()
+            ex = core.numbered_name(nk["name_pattern"], 1, nk["digits"])
+            self.name_ex.config(text=f"예: {ex}.jpg")
+            self.app.settings.update(img_name_pat=nk["name_pattern"], img_name_dig=nk["digits"])
+        except Exception:
+            pass
+
+    def _keyword_dialog(self):
+        if len(self.sel) != 1:
+            messagebox.showinfo(APP_NAME, "키워드를 만들 병원 항목 하나를 먼저 선택해주세요.")
+            return
+        if not core.list_images(self.sel[0]):
+            messagebox.showinfo(APP_NAME, "선택한 항목에 이미지가 없습니다.")
+            return
+        KeywordDialog(self, self.sel[0])
+
     def _run(self):
         if self.worker and self.worker.is_alive():
             return
@@ -489,21 +571,7 @@ class LibraryTab(ttk.Frame):
             messagebox.showinfo(APP_NAME, "선택한 항목에 이미지가 없습니다.")
             return
         vary = self.vary.get()
-        rnd_keys = [k for k, rv in self.adjust.rnd.items() if rv.get()]
-        _, cfg = self._range_cfg()
-
-        def fresh(rng):
-            """'랜덤'을 새로 누른 것과 같은 값 (체크된 항목·범위 설정 그대로) — 한 묶음에 쓸 고정값"""
-            k2 = dict(kw)
-            base = dict(kw["base"])
-            base.update(core.random_adjust(rng, rnd_keys))
-            k2["base"] = base
-            size = core.random_size(rng, cfg)
-            use = cfg.get("use", {})
-            for key, u in (("width", "len"), ("trim", "trim"), ("aspect", "aspect")):
-                if use.get(u, True):
-                    k2[key] = size[key]
-            return k2
+        fresh = self._fresh_factory(kw)
 
         desktop = known_folder("desktop")
         total = sum(len(f) * count for d, f in jobs) if self.is_img else count * len(jobs)
@@ -525,7 +593,8 @@ class LibraryTab(ttk.Frame):
                         for _ in range(count):
                             top = core.next_numbered_dir(desktop, self._out_base(d))
                             out = os.path.join(top, "output")
-                            core.make_folder_set(files, out, rng, progress=tick, **(fresh(rng) if vary else kw))
+                            core.make_folder_set(files, out, rng, progress=tick, **self._name_kw(),
+                                                 **(fresh(rng) if vary else kw))
                             outs.append(top)
                     else:
                         # 썸네일은 폴더 없이 바탕화면에 '병원명 썸넬 1.jpg' 처럼 바로 저장
@@ -564,3 +633,180 @@ class LibraryTab(ttk.Frame):
         except queue.Empty:
             pass
         self.after(80, self._poll)
+
+
+class KeywordDialog(tk.Toplevel):
+    """키워드 50칸(체크·항목별 저장) → 체크한 키워드 × 회차만큼
+    바탕화면\\병원명 시술명 날짜\\키워드 폴더 에 이미지 세트 생성"""
+    N = 50
+
+    def __init__(self, tab, item_dir):
+        super().__init__(tab.app.root)
+        self.tab, self.item = tab, item_dir
+        m = tab._read_meta(item_dir)
+        self.title(f"키워드 생성 - {m['hospital']} {m['procedure']}".strip())
+        self.transient(tab.app.root)
+        self.geometry("640x680")
+        self.minsize(560, 480)
+        self.q = queue.Queue()
+        self.worker = None
+        saved = tab._meta_raw(item_dir).get("keywords", [])
+
+        body = ttk.Frame(self, padding=12)
+        body.pack(fill="both", expand=True)
+
+        # 왼쪽: 키워드 50칸
+        left = ttk.Frame(body)
+        left.pack(side="left", fill="both", expand=True)
+        hdr = ttk.Frame(left)
+        hdr.pack(fill="x")
+        self.all_v = tk.BooleanVar(value=True)
+        ttk.Checkbutton(hdr, text="전체", variable=self.all_v, command=self._toggle_all).pack(side="left")
+        ttk.Label(hdr, text="키워드", font=FONT_B).pack(side="left", padx=8)
+        help_label(hdr, "키워드를 적어두면 이 병원 항목에 자동으로 기억됩니다.\n"
+                        "왼쪽 체크한 키워드만 만들어집니다.").pack(side="left")
+        sf = ScrollFrame(left)
+        sf.pack(fill="both", expand=True, pady=(6, 0))
+        self.rows = []
+        for i in range(self.N):
+            it = saved[i] if i < len(saved) else {}
+            r = ttk.Frame(sf.inner)
+            r.pack(fill="x", pady=1)
+            on = tk.BooleanVar(value=it.get("on", True))
+            kw = tk.StringVar(value=it.get("kw", ""))
+            ttk.Checkbutton(r, variable=on, command=self._save).pack(side="left")
+            ttk.Label(r, text=f"{i + 1:>2}", width=3, foreground=GRAY).pack(side="left")
+            e = ttk.Entry(r, textvariable=kw)
+            e.pack(side="left", fill="x", expand=True, padx=(2, 6))
+            kw.trace_add("write", lambda *a: self._save_later())
+            self.rows.append((on, kw))
+
+        # 오른쪽: 회차 · 다중 생성
+        right = ttk.Frame(body, padding=(14, 0, 0, 0), width=210)
+        right.pack(side="left", fill="y")
+        ttk.Label(right, text="총 생성 회차", font=FONT_B).pack(anchor="w")
+        self.times = tk.IntVar(value=tab._meta_raw(item_dir).get("kw_times", 1))
+        ttk.Spinbox(right, from_=1, to=100, textvariable=self.times, width=8).pack(anchor="w", pady=(4, 2))
+        help_label(right, "1 → 체크한 키워드마다 폴더 1개씩.\n"
+                          "3 → 키워드마다 '키워드 1', '키워드 2', '키워드 3' 폴더 3개씩.").pack(anchor="w")
+        self.vary = tk.BooleanVar(value=tab.vary.get())
+        ttk.Checkbutton(right, text="폴더마다 다른 랜덤값", variable=self.vary).pack(anchor="w", pady=(10, 0))
+        self.run_btn = ttk.Button(right, text="다중 생성하기", style="Big.TButton", command=self._run)
+        self.run_btn.pack(fill="x", pady=(14, 4), ipady=4)
+        self.where = WrapLabel(right, text="", foreground="#0a5")
+        self.where.pack(fill="x")
+        self.prog = ttk.Progressbar(right, mode="determinate")
+        self.prog.pack(fill="x", pady=(12, 4))
+        self.result = WrapLabel(right, text="")
+        self.result.pack(fill="x")
+        self.open_btn = ttk.Button(right, text="결과 폴더 열기", state="disabled",
+                                   command=lambda: open_folder(self.out_root))
+        self.open_btn.pack(anchor="w", pady=(6, 0))
+        self.out_root = self._out_root()
+        self.where.config(text=f"바탕화면\\{os.path.basename(self.out_root)}\\ 안에 생성됩니다.")
+        self._sjob = None
+        self.protocol("WM_DELETE_WINDOW", self._close)
+
+    def _out_root(self):
+        return os.path.join(known_folder("desktop"),
+                            f"{self.tab._out_base(self.item)} {datetime.now():%Y%m%d}")
+
+    def _toggle_all(self):
+        for on, _ in self.rows:
+            on.set(self.all_v.get())
+        self._save()
+
+    def _save_later(self):
+        if self._sjob:
+            self.after_cancel(self._sjob)
+        self._sjob = self.after(500, self._save)
+
+    def _save(self):
+        self._sjob = None
+        data = [{"kw": kw.get().strip(), "on": bool(on.get())} for on, kw in self.rows]
+        while data and not data[-1]["kw"] and data[-1]["on"]:
+            data.pop()
+        try:
+            t = int(self.times.get())
+        except Exception:
+            t = 1
+        try:
+            self.tab._write_meta(self.item, keywords=data, kw_times=t)
+        except Exception:
+            pass
+
+    def _close(self):
+        self._save()
+        self.destroy()
+
+    def _run(self):
+        if self.worker and self.worker.is_alive():
+            return
+        self._save()
+        kws = [kw.get().strip() for on, kw in self.rows if on.get() and kw.get().strip()]
+        if not kws:
+            messagebox.showinfo(APP_NAME, "체크한 키워드가 없습니다.", parent=self)
+            return
+        try:
+            times = max(1, int(self.times.get()))
+            kw = self.tab._params()
+        except Exception:
+            messagebox.showwarning(APP_NAME, "숫자를 확인해주세요.", parent=self)
+            return
+        files = core.list_images(self.item)
+        vary = self.vary.get()
+        fresh = self.tab._fresh_factory(kw)
+        name_kw = self.tab._name_kw()
+        root = self.out_root = self._out_root()
+        safe = self.tab._safe
+        self.prog.config(maximum=len(kws) * times * len(files), value=0)
+        self.run_btn.config(state="disabled")
+        self.result.config(text="만드는 중...")
+
+        def work():
+            rng = random.Random()
+            done = [0]
+            made = 0
+
+            def tick():
+                done[0] += 1
+                self.q.put(("prog", done[0]))
+            try:
+                os.makedirs(root, exist_ok=True)
+                for k in kws:
+                    for _ in range(times):
+                        base = safe(k)
+                        if times == 1 and not os.path.exists(os.path.join(root, base)):
+                            out = os.path.join(root, base)
+                        else:
+                            out = core.next_numbered_dir(root, base)
+                        core.make_folder_set(files, out, rng, progress=tick, **name_kw,
+                                             **(fresh(rng) if vary else kw))
+                        made += 1
+                self.q.put(("done", made, None))
+            except Exception as e:
+                self.q.put(("done", made, str(e)))
+
+        self.worker = threading.Thread(target=work, daemon=True)
+        self.worker.start()
+        self._poll()
+
+    def _poll(self):
+        try:
+            while True:
+                msg = self.q.get_nowait()
+                if msg[0] == "prog":
+                    self.prog["value"] = msg[1]
+                else:
+                    _, made, err = msg
+                    self.run_btn.config(state="normal")
+                    self.result.config(text=f"완료: 키워드 폴더 {made}개" + (f"\n오류: {err}" if err else ""))
+                    if made:
+                        self.open_btn.config(state="normal")
+                    if err:
+                        messagebox.showerror(APP_NAME, f"만드는 중 문제가 생겼습니다.\n{err}", parent=self)
+                    return
+        except queue.Empty:
+            pass
+        if self.winfo_exists():
+            self.after(80, self._poll)

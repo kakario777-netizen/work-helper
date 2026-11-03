@@ -152,6 +152,34 @@ def guess_keyword(filename, text):
     return cands[0] if cands else stem
 
 
+_URL = re.compile(r"https?://\S+")
+
+
+def convert_nateon(text):
+    """네이트온에서 긁은 '링크 (줄바꿈) 키워드' 또는 '링크 키워드' 묶음 → '키워드<탭>링크' 줄들"""
+    lines = [l.strip() for l in text.replace("\r\n", "\n").split("\n")]
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = _URL.search(line)
+        if not m:
+            i += 1
+            continue
+        url = m.group(0).rstrip(".,)")
+        kw = (line[:m.start()] + " " + line[m.end():]).strip()
+        if not kw:   # 같은 줄에 없으면 다음 글자 줄(링크가 아닌 줄)이 키워드
+            j = i + 1
+            while j < len(lines) and not lines[j]:
+                j += 1
+            if j < len(lines) and not _URL.search(lines[j]):
+                kw = lines[j]
+                i = j
+        out.append(f"{kw}\t{url}")
+        i += 1
+    return "\n".join(out)
+
+
 def guess_title(text):
     """원고의 제목 = 처음 나오는 글자 있는 줄 ('제목:' 같은 머리말은 떼고)"""
     for line in text.splitlines():
@@ -549,12 +577,21 @@ def next_numbered_dir(parent, base):
     return os.path.join(parent, f"{base} {n}")
 
 
-def make_folder_set(src_files, out_dir, rng, progress=None, **kw):
-    """원본 이미지 전부를 한 장씩 변형해 out_dir에 1.jpg~ (원본 순서대로)"""
+def numbered_name(pattern, n, digits=1):
+    """'image{번호}' + 3자리 → image001 ({번호} 가 없으면 끝에 번호를 붙임)"""
+    num = str(n).zfill(max(1, int(digits or 1)))
+    pattern = (pattern or "").strip() or "{번호}"
+    name = pattern.replace("{번호}", num) if "{번호}" in pattern else f"{pattern}{num}"
+    name = name.replace("{날짜}", datetime.now().strftime("%Y%m%d"))
+    return re.sub(r'[\\/:*?"<>|]', "_", name)
+
+
+def make_folder_set(src_files, out_dir, rng, progress=None, name_pattern="{번호}", digits=1, **kw):
+    """원본 이미지 전부를 한 장씩 변형해 out_dir 에 (원본 순서대로) 파일명 규칙대로 저장"""
     os.makedirs(out_dir, exist_ok=True)
     for i, src in enumerate(src_files):
         im, _ = make_variant(src, rng, **kw)
-        save_with_new_meta(im, os.path.join(out_dir, f"{i + 1}.jpg"), rng)
+        save_with_new_meta(im, os.path.join(out_dir, numbered_name(name_pattern, i + 1, digits) + ".jpg"), rng)
         if progress:
             progress()
 

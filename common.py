@@ -188,6 +188,49 @@ def install_wheel(root):
     root.bind_all("<MouseWheel>", on_wheel, add="+")
 
 
+class Tip:
+    """위젯 위에 마우스를 올려두는 동안만 바로 위에 뜨는 설명 말풍선"""
+
+    def __init__(self, widget, text):
+        self.w, self.text, self.tw = widget, text, None
+        widget.bind("<Enter>", self.show, add="+")
+        widget.bind("<Leave>", self.hide, add="+")
+        widget.bind("<ButtonPress>", self.hide, add="+")
+
+    def show(self, _e=None):
+        if self.tw or not self.text:
+            return
+        tw = tk.Toplevel(self.w)
+        tw.wm_overrideredirect(True)
+        try:
+            tw.attributes("-topmost", True)
+        except Exception:
+            pass
+        lbl = tk.Label(tw, text=self.text, justify="left", bg="#fff8d6", fg="#333", relief="solid", bd=1,
+                       font=("맑은 고딕", 9), padx=8, pady=6, wraplength=360)
+        lbl.pack()
+        tw.update_idletasks()
+        x = self.w.winfo_rootx()
+        y = self.w.winfo_rooty() - tw.winfo_reqheight() - 4
+        if y < 0:
+            y = self.w.winfo_rooty() + self.w.winfo_height() + 4
+        x = min(x, self.w.winfo_screenwidth() - tw.winfo_reqwidth() - 4)
+        tw.wm_geometry(f"+{max(0, x)}+{y}")
+        self.tw = tw
+
+    def hide(self, _e=None):
+        if self.tw:
+            self.tw.destroy()
+            self.tw = None
+
+
+def help_label(master, text, label="[사용 설명]"):
+    """긴 설명 대신 '[사용 설명]' 한 줄. 마우스를 올리면 설명이 뜸"""
+    lbl = ttk.Label(master, text=label, foreground="#2f6fbf", cursor="question_arrow")
+    Tip(lbl, text)
+    return lbl
+
+
 class WrapLabel(ttk.Label):
     """칸 너비에 맞춰 자동으로 줄바꿈되는 글자 (잘리지 않게)"""
 
@@ -223,10 +266,10 @@ class SizeCropPanel(ttk.LabelFrame):
             sp = ttk.Spinbox(self, from_=lo, to=hi, increment=inc, textvariable=var, width=7)
             sp.grid(row=r + i, column=1, sticky="w", padx=6)
             var.trace_add("write", lambda *a: self._changed())
-        WrapLabel(self, foreground=GRAY,
-                  text="순서: 원본 네 변을 같은 픽셀만큼 잘라냄(한 변 최대 4%) → 가로를 지정 크기로 키우거나 줄임"
-                       " → 세로는 원래 비율에서 ±% 만큼 조정. 한 번에 만드는 묶음(폴더) 안에서는 모두 같은 값."
-                  ).grid(row=r + 3, column=0, columnspan=2, sticky="we", pady=(6, 0))
+        help_label(self, "순서: 원본 네 변을 같은 픽셀만큼 잘라냄(한 변 최대 4%)\n"
+                         "→ 가로를 지정 크기로 키우거나 줄임\n→ 세로는 원래 비율에서 ±% 만큼 조정\n\n"
+                         "한 번에 만드는 묶음(폴더) 안에서는 모두 같은 값으로 들어갑니다."
+                   ).grid(row=r + 3, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.columnconfigure(0, weight=1)
 
     def get(self):
@@ -285,7 +328,8 @@ class AdjustPanel(ttk.Frame):
         hdr.pack(fill="x")
         self.all_var = tk.BooleanVar(value=all(rnd_saved.get(k, True) for k, *_ in core.ADJUSTS))
         ttk.Checkbutton(hdr, text="랜덤", variable=self.all_var, command=self._toggle_all).pack(side="left")
-        ttk.Label(hdr, text="← 체크한 것만 랜덤", foreground=GRAY).pack(side="left", padx=4)
+        help_label(hdr, "왼쪽 체크한 항목만 '랜덤' 버튼을 누를 때 바뀝니다.\n맨 위 '랜덤' 체크로 전체를 켜고 끕니다.\n"
+                        "바를 더블클릭하면 0으로 돌아갑니다.").pack(side="left", padx=6)
         for k, name, lo, hi in core.ADJUSTS:
             row = ttk.Frame(sf.inner)
             row.pack(fill="x", pady=1)
@@ -301,7 +345,6 @@ class AdjustPanel(ttk.Frame):
             sc.bind("<Double-Button-1>", lambda e, var=v: (var.set(0), self._changed()))
             self.vars[k] = v
             self.rnd[k] = rv
-        ttk.Label(sf.inner, text="바를 더블클릭하면 0으로 돌아갑니다.", foreground=GRAY).pack(anchor="w", pady=(4, 0))
 
     def get(self):
         return {k: round(v.get(), 1) for k, v in self.vars.items()}
@@ -493,7 +536,7 @@ class Preview(ttk.Frame):
             canvas.paste(b, (a.width + 6, (a.height - b.height) // 2))
             self._img = ImageTk.PhotoImage(canvas)
             self.lbl.config(image=self._img, text="")
-            self.tip.config(text="왼쪽 원본 · 오른쪽 결과 (클릭하면 크게 비교)")
+            self.tip.config(text="왼쪽 원본 · 오른쪽 결과 (클릭: 크게 비교)")
         except Exception as e:
             self.lbl.config(image="", text=f"미리보기 불가: {e}")
 

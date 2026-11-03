@@ -50,9 +50,9 @@ class App:
         # 메인 탭: 키 → (화면, 이름)
         self.tabs = {
             "text": (self.text_tab, "텍스트 정리"),
-            "image": (self.image_tab, "이미지 관리"),
-            "capture": (self.cap_tab, "이미지 캡쳐"),
-            "thumb": (self.thumb_tab, "썸네일"),
+            "image": (self.image_tab, "이미지 가공"),
+            "capture": (self.cap_tab, "이미지 생성"),
+            "thumb": (self.thumb_tab, "썸네일 생성"),
         }
         self.apply_layout()
         try:
@@ -384,6 +384,9 @@ def main():
             # 보고서 정리
             app.text_tab.rank_in.insert("1.0", "서울역피부과\thttps://blog.naver.com/a/1\t8\t나음피부과")
             app.text_tab._do_rank()
+            app.text_tab.nate_in.insert("1.0", "https://blog.naver.com/a/1\n\n일산백옥주사\n\nhttps://blog.naver.com/b/2 65세이상 임플란트\n")
+            app.text_tab._do_nate()
+            print("nate:", app.text_tab.nate_out.get("1.0", "end-1c").replace("\t", " | ").replace("\n", " // "), flush=True)
             print("report:", app.text_tab.rank_out.get("1.0", "end-1c"), flush=True)
             # 설정: 탭 숨기기·순서
             d = SettingsDialog(app)
@@ -443,6 +446,26 @@ def main():
             print("capture:", dirs, [len(os.listdir(os.path.join(tmp, x, "output"))) for x in dirs], flush=True)
             from PIL import Image as _I
             o1 = os.path.join(tmp, dirs[0], "output")
+            # 키워드 다중 생성 창
+            from tab_library import KeywordDialog
+            cap.name_pat.set("image{번호}")
+            cap.name_dig.set(3)
+            kd = KeywordDialog(cap, cap.sel[0])
+            kd.rows[0][1].set("일산백옥주사")
+            kd.rows[1][1].set("일산코필러")
+            kd.rows[1][0].set(False)
+            kd.rows[2][1].set("65세이상 임플란트")
+            kd.times.set(2)
+            kd._save()
+            kd.out_root = os.path.join(tmp, "kwout")
+            kd._out_root = lambda: os.path.join(tmp, "kwout")
+            kd._run()
+            kd.worker.join(60)
+            kd._poll()
+            kws = sorted(os.listdir(os.path.join(tmp, "kwout")))
+            print("keyword folders:", kws, sorted(os.listdir(os.path.join(tmp, "kwout", kws[0]))), flush=True)
+            print("keywords saved:", [k["kw"] for k in cap._meta_raw(cap.sel[0]).get("keywords", [])], flush=True)
+            kd.destroy()
             print("same width in folder:", sorted({_I.open(os.path.join(o1, f)).size[0] for f in os.listdir(o1)}), flush=True)
             cap.view.set("list")
             cap._switch_view()
