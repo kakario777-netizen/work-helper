@@ -254,6 +254,7 @@ def main():
             app.image_tab._preview()
             o = app.image_tab._opts()
             o["adjust"] = app.image_tab.adjust.get()
+            os.makedirs(os.path.join(src, "output"), exist_ok=True)
             print("imgtab:", core.process_image(core.list_images(src)[0], os.path.join(src, "output"), 1, o)[0], flush=True)
             # 이미지 캡쳐: 보관 → 그리드 → 랜덤 → 폴더 2개
             cap = app.cap_tab
