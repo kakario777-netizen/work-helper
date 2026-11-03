@@ -1,0 +1,47 @@
+name: 윈도우 exe 빌드
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 라이브러리 설치
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: 동작 확인
+        run: python app.py --selftest
+        timeout-minutes: 3
+
+      - name: exe 만들기
+        run: >
+          pyinstaller --noconfirm --onefile --windowed --name WorkHelper
+          --hidden-import pynput.keyboard._win32 --hidden-import pynput.mouse._win32
+          app.py
+
+      - name: 버전 정하기
+        id: ver
+        shell: bash
+        run: echo "tag=v1.0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: 릴리스에 올리기
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: 업무 도우미 ${{ steps.ver.outputs.tag }}
+          body: |
+            WorkHelper.exe 를 받아서 바로 실행하세요. (설치 필요 없음)
+            처음 실행 때 '윈도우의 PC 보호' 창이 뜨면 '추가 정보' → '실행'을 누르면 됩니다.
+          files: dist/WorkHelper.exe
