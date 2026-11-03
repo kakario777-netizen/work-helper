@@ -24,6 +24,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=force
 RestartApplications=no
 WizardStyle=modern
+SetupIconFile=icon.ico
 VersionInfoVersion={#MyAppVersion}
 VersionInfoCompany=kakario777
 VersionInfoDescription=업무 도우미 설치

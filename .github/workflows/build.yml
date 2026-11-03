@@ -46,6 +46,7 @@ jobs:
           python -m nuitka --standalone --assume-yes-for-downloads --msvc=latest `
             --enable-plugin=tk-inter --windows-console-mode=disable `
             --include-package=tkinterdnd2 `
+            --windows-icon-from-ico=icon.ico --include-data-files=icon.ico=icon.ico `
             --output-dir=build --output-filename=WorkHelper.exe `
             --company-name=kakario777 --product-name=WorkHelper `
             --file-description="WorkHelper" --copyright=kakario777 `

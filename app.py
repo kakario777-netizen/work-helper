@@ -21,6 +21,10 @@ class App:
         self.root = root
         self.settings = load_settings()
         root.title(f"{APP_NAME} {VERSION}")
+        try:   # 창 왼쪽 위·작업 표시줄 아이콘 (새 창들도 같은 아이콘)
+            root.iconbitmap(default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico"))
+        except Exception:
+            pass
         root.geometry(self.settings.get("geometry", "1400x820"))
         root.minsize(1100, 680)
 
