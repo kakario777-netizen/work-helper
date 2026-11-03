@@ -2,7 +2,7 @@
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ─────────────────────────── 텍스트 ───────────────────────────
 
@@ -103,53 +103,73 @@ def wrap_text(text, width=20, sentence_blank=False, keep_first=True, tol=2):
     return "\n\n".join(out_blocks)
 
 
-REPORT_KINDS = {
-    "업무 보고서": ("【업무 보고서】", "주요 내용", "이상 보고드립니다."),
-    "일일 업무일지": ("【일일 업무일지】", "오늘 한 일", "이상입니다."),
-    "회의록": ("【회의록】", "논의 내용", "이상 회의 내용 정리입니다."),
-}
+# ── 순위 정리: "키워드<탭>링크<탭>순위<탭>병원명" → "링크 [병원명] 키워드" ──
 
-BULLET_PREFIX = re.compile(r"^\s*(?:[-*•·□■▶>]+|\d+[.)])\s*")
-
-
-def make_report(kind, title, author, date, memo, extra=""):
-    """메모(한 줄에 하나씩)를 보고서 양식으로.
-    '#'로 시작하거나 ':'로 끝나는 줄은 항목 제목이 됨."""
-    head, default_sec, closing = REPORT_KINDS.get(kind, REPORT_KINDS["업무 보고서"])
-    sections = []
-    for raw in memo.replace("\r\n", "\n").split("\n"):
+def convert_rank(text):
+    out = []
+    for raw in text.replace("\r\n", "\n").split("\n"):
         line = raw.strip()
         if not line:
             continue
-        if line.startswith("#") or line.endswith(":") or line.endswith("："):
-            name = line.lstrip("#").rstrip(":：").strip()
-            sections.append([name, []])
-        else:
-            item = BULLET_PREFIX.sub("", line).strip()
-            if not item:
-                continue
-            if not sections:
-                sections.append([default_sec, []])
-            sections[-1][1].append(item)
-
-    bar = "─" * 24
-    out = [head, ""]
-    if title.strip():
-        out.append(f"제    목 : {title.strip()}")
-    if author.strip():
-        out.append(f"작 성 자 : {author.strip()}")
-    out.append(f"작 성 일 : {date.strip() or datetime.now().strftime('%Y-%m-%d')}")
-    if extra.strip():
-        label = "참 석 자" if kind == "회의록" else "비    고"
-        out.append(f"{label} : {extra.strip()}")
-    out += ["", bar, ""]
-    for i, (name, items) in enumerate(sections, 1):
-        out.append(f"{i}. {name}")
-        for it in items:
-            out.append(f"   - {it}")
-        out.append("")
-    out += [bar, closing]
+        parts = [p.strip() for p in line.split("\t")] if "\t" in line else line.split()
+        parts = [p for p in parts if p]
+        link_i = next((i for i, p in enumerate(parts) if p.lower().startswith("http")), None)
+        if link_i is None:
+            continue  # 머리글 등 링크 없는 줄은 건너뜀
+        link = parts[link_i]
+        keyword = " ".join(parts[:link_i]).strip()
+        rest = parts[link_i + 1:]
+        # 순위(숫자) 뒤에 오는 것이 병원명
+        if rest and re.fullmatch(r"[\d.\-위]+", rest[0]):
+            rest = rest[1:]
+        hospital = " ".join(rest).strip()
+        out.append(f"{link} [{hospital}] {keyword}" if hospital else f"{link} {keyword}")
     return "\n".join(out)
+
+
+# ── 원고 검사 ──
+
+_LEAD_NUM = re.compile(r"^[\s\d._\-()\[\]#]+")
+_SPLIT = re.compile(r"[\s_\-.,()\[\]{}+]+")
+
+
+def guess_keyword(filename, text):
+    """키워드 추정: 파일명 첫 단어가 본문에 있으면 그것, 아니면 본문 첫 단어"""
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    stem = _LEAD_NUM.sub("", stem)
+    cands = [t for t in _SPLIT.split(stem) if len(t) >= 2]
+    for c in cands:
+        if c in text:
+            return c
+    for line in text.splitlines():
+        line = line.strip()
+        if line:
+            first = re.sub(r"^[^\w가-힣]+|[^\w가-힣]+$", "", line.split()[0])
+            if len(first) >= 2:
+                return first
+            break
+    return cands[0] if cands else stem
+
+
+def count_keywords(text, keyword_field):
+    """'서울역피부과, 수술흉터제거' → [('서울역피부과', 5), ...]"""
+    res = []
+    for k in re.split(r"[,，]", keyword_field):
+        k = k.strip()
+        if k:
+            res.append((k, text.count(k)))
+    return res
+
+
+def count_forbidden(text, words):
+    res = []
+    for w in words:
+        w = w.strip()
+        if w:
+            n = text.count(w)
+            if n:
+                res.append((w, n))
+    return res
 
 
 # ─────────────────────────── 이미지 ───────────────────────────
@@ -255,3 +275,121 @@ def human_size(n):
         if n < 1024 or unit == "GB":
             return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
         n /= 1024
+
+
+# ─────────────────────────── 랜덤 캡쳐(병원 이미지·썸네일) ───────────────────────────
+
+def _tone_lut(rng):
+    """감마 1~3%, 채널별 아주 미세한 색 틀어짐"""
+    g = 1 + rng.choice((-1, 1)) * rng.uniform(0.01, 0.03)
+    lut = []
+    for ch in range(3):
+        tint = 1 + rng.uniform(-0.006, 0.006)
+        for v in range(256):
+            x = (v / 255.0) ** (1 / g) * 255.0 * tint
+            lut.append(max(0, min(255, int(round(x)))))
+    return lut, g
+
+
+def make_variant(src_path, long_min, long_max, rng, aspect_jitter=0.05):
+    """원본을 사람이 캡쳐한 것처럼 무작위로 잘라 크기를 바꾸고 색감을 아주 살짝 틀어 줌.
+    반환: (PIL 이미지, 적용값 설명)"""
+    from PIL import Image, ImageOps, ImageEnhance
+    with Image.open(src_path) as im:
+        im = ImageOps.exif_transpose(im)
+        if im.mode in ("RGBA", "LA", "P"):
+            im = im.convert("RGBA")
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        else:
+            im = im.convert("RGB")
+        W, H = im.size
+
+        # 1) 자르기: 원본의 82~97%, 비율은 원본에서 살짝만 어긋나게, 위치는 랜덤
+        a = (W / H) * rng.uniform(1 - aspect_jitter, 1 + aspect_jitter)
+        scale = rng.uniform(0.82, 0.97)
+        cw = W * scale
+        ch = cw / a
+        if ch > H * 0.98:
+            ch = H * rng.uniform(0.85, 0.98)
+            cw = min(W, ch * a)
+        x = rng.uniform(0, max(0, W - cw))
+        y = rng.uniform(0, max(0, H - ch))
+        box = (int(x), int(y), int(x + cw), int(y + ch))
+        im = im.crop(box)
+        cw, ch = im.size
+
+        # 2) 크기: 긴 변을 long_min~long_max에서 랜덤, 짧은 변은 비율 따라 + 몇 픽셀 엇나감
+        L = rng.randint(long_min, long_max)
+        if cw >= ch:
+            ow, oh = L, round(L * ch / cw) + rng.randint(-6, 6)
+        else:
+            oh, ow = L, round(L * cw / ch) + rng.randint(-6, 6)
+        im = im.resize((max(50, ow), max(50, oh)), Image.LANCZOS)
+
+        # 3) 색감: 밝기 ~1%, 대비 ~1%, 채도 1~2%, 감마 1~3%
+        sign = lambda: rng.choice((-1, 1))
+        br = 1 + sign() * rng.uniform(0.004, 0.012)
+        co = 1 + sign() * rng.uniform(0.004, 0.012)
+        sa = 1 + sign() * rng.uniform(0.01, 0.02)
+        im = ImageEnhance.Brightness(im).enhance(br)
+        im = ImageEnhance.Contrast(im).enhance(co)
+        im = ImageEnhance.Color(im).enhance(sa)
+        lut, g = _tone_lut(rng)
+        im = im.point(lut)
+        if rng.random() < 0.5:
+            im = ImageEnhance.Sharpness(im).enhance(1 + rng.uniform(-0.08, 0.08))
+        info = f"{im.size[0]}x{im.size[1]} 밝기{br:.3f} 대비{co:.3f} 채도{sa:.3f} 감마{g:.3f}"
+        return im, info
+
+
+def save_with_new_meta(im, path, rng):
+    """원본 메타데이터는 버리고 새 날짜·고유ID로 저장, 인코딩 설정도 매번 다르게"""
+    from PIL import Image
+    t = datetime.now() - timedelta(seconds=rng.randint(0, 3 * 24 * 3600))
+    stamp = t.strftime("%Y:%m:%d %H:%M:%S")
+    exif = Image.Exif()
+    exif[0x0132] = stamp                         # DateTime
+    exif[0x0131] = rng.choice(["", "Windows Photo Editor", "Snipping Tool", "Microsoft Windows"])
+    exif[0x0131] = exif[0x0131] or None
+    if exif[0x0131] is None:
+        del exif[0x0131]
+    ifd = exif.get_ifd(0x8769)
+    ifd[0x9003] = stamp                          # DateTimeOriginal
+    ifd[0x9004] = stamp                          # DateTimeDigitized
+    ifd[0xA420] = "%032x" % rng.getrandbits(128)  # ImageUniqueID
+    ifd[0xA002] = im.size[0]
+    ifd[0xA003] = im.size[1]
+    im.save(path, "JPEG", quality=rng.randint(89, 96), subsampling=rng.choice((0, 1, 2)),
+            optimize=rng.random() < 0.5, progressive=rng.random() < 0.4, exif=exif.tobytes())
+    ts = t.timestamp()
+    os.utime(path, (ts, ts))
+
+
+def next_numbered_dir(parent, base):
+    n = 1
+    while os.path.exists(os.path.join(parent, f"{base} {n}")):
+        n += 1
+    return os.path.join(parent, f"{base} {n}")
+
+
+def generate_set(src_files, out_dir, count, long_min, long_max, seed=None, progress=None):
+    """src_files에서 count장 만들어 out_dir에 1.jpg~ 로 저장. 원본을 고르게 돌아가며 사용"""
+    import random
+    rng = random.Random(seed)
+    os.makedirs(out_dir, exist_ok=True)
+    order = []
+    made = []
+    for i in range(count):
+        if not order:
+            order = list(src_files)
+            rng.shuffle(order)
+        src = order.pop()
+        im, info = make_variant(src, long_min, long_max, rng)
+        p = os.path.join(out_dir, f"{i + 1}.jpg")
+        save_with_new_meta(im, p, rng)
+        made.append((p, os.path.basename(src), info))
+        if progress:
+            progress(i + 1)
+    return made

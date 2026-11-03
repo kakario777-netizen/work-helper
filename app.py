@@ -1,10 +1,10 @@
-"""업무 도우미 - 텍스트 정리 / 이미지 관리 / 화면 캡쳐"""
+"""업무 도우미 - 텍스트 정리 / 이미지 관리 / 이미지 캡쳐 / 썸네일"""
 import json
 import os
 import queue
+import shutil
 import sys
 import threading
-import time
 from datetime import datetime
 
 import tkinter as tk
@@ -13,27 +13,51 @@ from tkinter import ttk, filedialog, messagebox
 import core
 
 APP_NAME = "업무 도우미"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
-# ── 윈도우 고해상도(배율) 대응: 캡쳐 좌표가 실제 픽셀과 맞도록 ──
 if sys.platform == "win32":
     try:
         import ctypes
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
-        try:
-            ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
+        pass
 
 try:
-    from pynput import keyboard as pkeyboard
+    from tkinterdnd2 import TkinterDnD, DND_FILES
 except Exception:
-    pkeyboard = None
+    TkinterDnD = None
+    DND_FILES = None
 
 FONT = ("맑은 고딕", 10)
 FONT_B = ("맑은 고딕", 10, "bold")
 MONO = ("맑은 고딕", 11)
+GRAY = "#666"
+
+
+def known_folder(which):
+    """윈도우의 실제 '문서'·'바탕화면' 경로(원드라이브로 옮겨진 경우 포함)"""
+    guids = {"documents": "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}",
+             "desktop": "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}"}
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class GUID(ctypes.Structure):
+                _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD),
+                            ("d3", wintypes.WORD), ("d4", ctypes.c_ubyte * 8)]
+            g = GUID()
+            ctypes.oledll.ole32.CLSIDFromString(guids[which], ctypes.byref(g))
+            p = ctypes.c_wchar_p()
+            ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(g), 0, None, ctypes.byref(p))
+            path = p.value
+            ctypes.windll.ole32.CoTaskMemFree(p)
+            if path:
+                return path
+        except Exception:
+            pass
+    home = os.path.expanduser("~")
+    return os.path.join(home, "Documents" if which == "documents" else "Desktop")
 
 
 def settings_path():
@@ -57,6 +81,22 @@ def save_settings(s):
             json.dump(s, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+
+
+def enable_drop(widget, callback):
+    """파일·폴더를 끌어다 놓으면 callback(경로 목록)"""
+    if not DND_FILES:
+        return False
+    try:
+        widget.drop_target_register(DND_FILES)
+        widget.dnd_bind("<<Drop>>", lambda e: (callback(list(widget.tk.splitlist(e.data))), e.action)[1])
+        return True
+    except Exception:
+        return False
+
+
+def drop_hint():
+    return "여기로 끌어다 놓거나 " if DND_FILES else ""
 
 
 def open_folder(path):
@@ -83,6 +123,7 @@ def copy_to_clipboard(root, text):
     root.clipboard_append(text)
 
 
+
 # ════════════════════════════ 텍스트 정리 ════════════════════════════
 
 class TextTab(ttk.Frame):
@@ -91,68 +132,44 @@ class TextTab(ttk.Frame):
         self.app = app
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True)
-        nb.add(self._build_count(nb), text="  글자수·키워드  ")
-        nb.add(self._build_wrap(nb), text="  줄바꿈·형식 정리  ")
-        nb.add(self._build_report(nb), text="  메모 → 보고서  ")
+        self.check = CheckPanel(nb, app)
+        nb.add(self.check, text="  원고 검사(글자수·키워드·금지어)  ")
+        nb.add(self._build_rank(nb), text="  순위 정리  ")
+        nb.add(self._build_wrap(nb), text="  줄바꿈 정리  ")
 
-    # ── 글자수·키워드 ──
-    def _build_count(self, nb):
+    # ── 순위 정리 ──
+    def _build_rank(self, nb):
         f = ttk.Frame(nb, padding=8)
-        top = ttk.Frame(f)
-        top.pack(fill="x")
-        ttk.Label(top, text="키워드(쉼표로 구분)").pack(side="left")
-        self.kw_var = tk.StringVar(value=self.app.settings.get("keywords", ""))
-        e = ttk.Entry(top, textvariable=self.kw_var, width=50)
-        e.pack(side="left", padx=6, fill="x", expand=True)
-        self.kw_var.trace_add("write", lambda *a: self._update_count())
-        ttk.Button(top, text="파일 열기", command=self._open_count_file).pack(side="left")
-
+        bar = ttk.Frame(f)
+        bar.pack(fill="x")
+        ttk.Label(bar, text="왼쪽에 '키워드  링크  순위  병원명' 표를 붙여넣으면 오른쪽에 '링크 [병원명] 키워드'로 바로 바뀝니다.",
+                  foreground=GRAY).pack(side="left")
+        ttk.Button(bar, text="결과 복사", command=lambda: self._copy(self.rank_out)).pack(side="right")
+        ttk.Button(bar, text="지우기", command=lambda: self.rank_in.delete("1.0", "end")).pack(side="right", padx=4)
         body = ttk.PanedWindow(f, orient="horizontal")
-        body.pack(fill="both", expand=True, pady=(8, 0))
-        left, self.count_text = text_box(body)
-        body.add(left, weight=3)
-        right = ttk.Frame(body, padding=(10, 0))
-        body.add(right, weight=1)
-        self.count_text.bind("<<Modified>>", self._on_count_modified)
-
-        ttk.Label(right, text="결과", font=FONT_B).pack(anchor="w")
-        self.stat_lbl = ttk.Label(right, text="", justify="left", font=MONO)
-        self.stat_lbl.pack(anchor="w", pady=(4, 10))
-        self.kw_tree = ttk.Treeview(right, columns=("kw", "n"), show="headings", height=12)
-        self.kw_tree.heading("kw", text="키워드")
-        self.kw_tree.heading("n", text="횟수")
-        self.kw_tree.column("kw", width=140)
-        self.kw_tree.column("n", width=50, anchor="center")
-        self.kw_tree.pack(fill="both", expand=True)
-        self._update_count()
+        body.pack(fill="both", expand=True, pady=(6, 0))
+        lf, self.rank_in = text_box(body)
+        rf, self.rank_out = text_box(body)
+        self.rank_in.configure(wrap="none")
+        self.rank_out.configure(wrap="none")
+        body.add(lf, weight=1)
+        body.add(rf, weight=1)
+        self.rank_info = ttk.Label(f, text="")
+        self.rank_info.pack(anchor="e", pady=(4, 0))
+        self.rank_in.bind("<<Modified>>", self._rank_changed)
         return f
 
-    def _open_count_file(self):
-        p = filedialog.askopenfilename(filetypes=[("텍스트", "*.txt"), ("모든 파일", "*.*")])
-        if p:
-            self.count_text.delete("1.0", "end")
-            self.count_text.insert("1.0", read_text_file(p))
+    def _rank_changed(self, _e=None):
+        if not self.rank_in.edit_modified():
+            return
+        self.rank_in.edit_modified(False)
+        res = core.convert_rank(self.rank_in.get("1.0", "end-1c"))
+        self.rank_out.delete("1.0", "end")
+        self.rank_out.insert("1.0", res)
+        n = len(res.splitlines()) if res else 0
+        self.rank_info.config(text=f"{n}줄 변환")
 
-    def _on_count_modified(self, _e):
-        if self.count_text.edit_modified():
-            self._update_count()
-            self.count_text.edit_modified(False)
-
-    def _update_count(self):
-        text = self.count_text.get("1.0", "end-1c")
-        kws = [k for k in self.kw_var.get().split(",") if k.strip()]
-        self.app.settings["keywords"] = self.kw_var.get()
-        s = core.count_stats(text, kws)
-        self.stat_lbl.config(text=(
-            f"공백 제외 : {s['no_space']:,}자\n"
-            f"공백 포함 : {s['with_space']:,}자\n"
-            f"문단 수   : {s['paragraphs']}개\n"
-            f"줄 수     : {s['lines']}줄"))
-        self.kw_tree.delete(*self.kw_tree.get_children())
-        for k, n in s["keywords"]:
-            self.kw_tree.insert("", "end", values=(k, n))
-
-    # ── 줄바꿈·형식 정리 ──
+    # ── 줄바꿈 정리 ──
     def _build_wrap(self, nb):
         f = ttk.Frame(nb, padding=8)
         opt = ttk.Frame(f)
@@ -166,10 +183,8 @@ class TextTab(ttk.Frame):
         ttk.Checkbutton(opt, text="문장마다 빈 줄", variable=self.wrap_sent).pack(side="left", padx=4)
         ttk.Button(opt, text="정리하기 ▶", command=self._do_wrap).pack(side="left", padx=12)
         ttk.Button(opt, text="결과 복사", command=lambda: self._copy(self.wrap_out)).pack(side="left")
-        ttk.Button(opt, text="결과 저장", command=lambda: self._save(self.wrap_out)).pack(side="left", padx=4)
         ttk.Label(f, text="'-', '#', '[' 로 시작하는 줄(요약·소제목·이미지 표시)은 그대로 둡니다.",
-                  foreground="#666").pack(anchor="w", pady=(6, 0))
-
+                  foreground=GRAY).pack(anchor="w", pady=(6, 0))
         body = ttk.PanedWindow(f, orient="horizontal")
         body.pack(fill="both", expand=True, pady=(6, 0))
         lf, self.wrap_in = text_box(body)
@@ -193,66 +208,207 @@ class TextTab(ttk.Frame):
         s = core.count_stats(res, [])
         self.wrap_info.config(text=f"결과  공백 제외 {s['no_space']:,}자 · 문단 {s['paragraphs']}개")
 
-    # ── 메모 → 보고서 ──
-    def _build_report(self, nb):
-        f = ttk.Frame(nb, padding=8)
-        form = ttk.Frame(f)
-        form.pack(fill="x")
-        self.rp_kind = tk.StringVar(value="업무 보고서")
-        self.rp_title = tk.StringVar()
-        self.rp_author = tk.StringVar(value=self.app.settings.get("author", ""))
-        self.rp_date = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
-        self.rp_extra = tk.StringVar()
-        ttk.Label(form, text="양식").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(form, textvariable=self.rp_kind, values=list(core.REPORT_KINDS),
-                     state="readonly", width=14).grid(row=0, column=1, sticky="w", padx=4)
-        ttk.Label(form, text="제목").grid(row=0, column=2, sticky="w", padx=(12, 0))
-        ttk.Entry(form, textvariable=self.rp_title, width=36).grid(row=0, column=3, sticky="we", padx=4)
-        ttk.Label(form, text="작성자").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(form, textvariable=self.rp_author, width=16).grid(row=1, column=1, sticky="w", padx=4)
-        ttk.Label(form, text="날짜").grid(row=1, column=2, sticky="w", padx=(12, 0))
-        ttk.Entry(form, textvariable=self.rp_date, width=14).grid(row=1, column=3, sticky="w", padx=4)
-        ttk.Label(form, text="비고/참석자").grid(row=2, column=0, sticky="w")
-        ttk.Entry(form, textvariable=self.rp_extra, width=50).grid(row=2, column=1, columnspan=3, sticky="we", padx=4)
-        form.columnconfigure(3, weight=1)
-
-        bar = ttk.Frame(f)
-        bar.pack(fill="x", pady=6)
-        ttk.Label(bar, text="메모는 한 줄에 하나씩. '#'로 시작하거나 ':'로 끝나는 줄은 항목 제목이 됩니다.",
-                  foreground="#666").pack(side="left")
-        ttk.Button(bar, text="결과 저장", command=lambda: self._save(self.rp_out)).pack(side="right")
-        ttk.Button(bar, text="결과 복사", command=lambda: self._copy(self.rp_out)).pack(side="right", padx=4)
-        ttk.Button(bar, text="보고서 만들기 ▶", command=self._do_report).pack(side="right")
-
-        body = ttk.PanedWindow(f, orient="horizontal")
-        body.pack(fill="both", expand=True)
-        lf, self.rp_in = text_box(body)
-        rf, self.rp_out = text_box(body)
-        body.add(lf, weight=1)
-        body.add(rf, weight=1)
-        self.rp_in.insert("1.0", "# 진행 사항\n거래처 미팅 완료\n견적서 발송\n# 예정 사항\n다음 주 계약 검토")
-        return f
-
-    def _do_report(self):
-        self.app.settings["author"] = self.rp_author.get()
-        res = core.make_report(self.rp_kind.get(), self.rp_title.get(), self.rp_author.get(),
-                               self.rp_date.get(), self.rp_in.get("1.0", "end-1c"), self.rp_extra.get())
-        self.rp_out.delete("1.0", "end")
-        self.rp_out.insert("1.0", res)
-
-    # ── 공용 ──
     def _copy(self, box):
         copy_to_clipboard(self.app.root, box.get("1.0", "end-1c"))
         self.app.status("클립보드에 복사했습니다.")
 
-    def _save(self, box):
-        p = filedialog.asksaveasfilename(defaultextension=".txt",
-                                         initialfile=datetime.now().strftime("정리_%Y%m%d_%H%M.txt"),
-                                         filetypes=[("텍스트", "*.txt")])
-        if p:
-            with open(p, "w", encoding="utf-8") as fh:
-                fh.write(box.get("1.0", "end-1c"))
-            self.app.status(f"저장했습니다: {p}")
+
+class CheckPanel(ttk.Frame):
+    """메모장 원고 여러 개를 끌어다 놓으면 파일별 글자수·키워드 수·금지어를 표로"""
+    COLS = (("file", "파일", 220, "w"), ("kw", "키워드 (더블클릭해서 수정)", 200, "w"),
+            ("kwn", "키워드 수", 130, "center"), ("ns", "공백 제외", 80, "center"),
+            ("ws", "공백 포함", 80, "center"), ("bad", "금지어", 200, "w"))
+
+    def __init__(self, master, app):
+        super().__init__(master, padding=8)
+        self.app = app
+        self.docs = {}  # iid → {"path","text","kw"}
+
+        top = ttk.Frame(self)
+        top.pack(fill="x")
+        ttk.Label(top, text="금지어", font=FONT_B).pack(side="left")
+        self.forbid = tk.StringVar(value=app.settings.get("forbidden", "전문, 자료"))
+        ttk.Entry(top, textvariable=self.forbid).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Label(top, text="쉼표로 구분", foreground=GRAY).pack(side="left")
+        self.forbid.trace_add("write", lambda *a: self.refresh_all())
+
+        bar = ttk.Frame(self)
+        bar.pack(fill="x", pady=(8, 4))
+        ttk.Label(bar, text=f"메모장(.txt) 파일이나 폴더를 {drop_hint()}버튼으로 추가하세요.",
+                  foreground=GRAY).pack(side="left")
+        for txt, cmd in (("표 복사", self.copy_table), ("다시 읽기", self.reload), ("비우기", self.clear),
+                         ("선택 삭제", self.remove_sel), ("폴더 추가", self.add_folder), ("파일 추가", self.add_files)):
+            ttk.Button(bar, text=txt, command=cmd).pack(side="right", padx=2)
+
+        pw = ttk.PanedWindow(self, orient="vertical")
+        pw.pack(fill="both", expand=True)
+
+        tf = ttk.Frame(pw)
+        self.tree = ttk.Treeview(tf, columns=[c[0] for c in self.COLS], show="headings", selectmode="extended")
+        for cid, title, w, anchor in self.COLS:
+            self.tree.heading(cid, text=title)
+            self.tree.column(cid, width=w, anchor=anchor)
+        sb = ttk.Scrollbar(tf, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.tree.tag_configure("bad", background="#ffe3e3")
+        self.tree.tag_configure("nokw", background="#fff6d6")
+        self.tree.bind("<Double-1>", self._dbl)
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._show_preview())
+        pw.add(tf, weight=3)
+
+        pf = ttk.Frame(pw)
+        kb = ttk.Frame(pf)
+        kb.pack(fill="x", pady=(6, 4))
+        ttk.Label(kb, text="선택한 파일 키워드").pack(side="left")
+        self.kw_edit = tk.StringVar()
+        e = ttk.Entry(kb, textvariable=self.kw_edit, width=40)
+        e.pack(side="left", padx=6)
+        e.bind("<Return>", lambda ev: self._apply_kw())
+        ttk.Button(kb, text="적용", command=self._apply_kw).pack(side="left")
+        ttk.Label(kb, text="키워드가 여러 개면 쉼표로  ·  미리보기: 파랑=키워드, 빨강=금지어",
+                  foreground=GRAY).pack(side="left", padx=10)
+        box, self.preview = text_box(pf, height=8)
+        box.pack(fill="both", expand=True)
+        self.preview.tag_configure("kw", background="#d6e8ff", foreground="#0645ad")
+        self.preview.tag_configure("bad", background="#ffd0d0", foreground="#c00")
+        pw.add(pf, weight=2)
+
+        self.summary = ttk.Label(self, text="")
+        self.summary.pack(anchor="w", pady=(4, 0))
+
+        for w in (self.tree, self):
+            enable_drop(w, self.add_paths)
+
+    # ── 파일 추가 ──
+    def add_paths(self, paths):
+        files = []
+        for p in paths:
+            if os.path.isdir(p):
+                for root, _, fs in os.walk(p):
+                    files += [os.path.join(root, f) for f in sorted(fs) if f.lower().endswith(".txt")]
+            elif p.lower().endswith(".txt"):
+                files.append(p)
+        known = {d["path"] for d in self.docs.values()}
+        for p in files:
+            p = os.path.normpath(p)
+            if p in known:
+                continue
+            text = read_text_file(p)
+            iid = self.tree.insert("", "end")
+            self.docs[iid] = {"path": p, "text": text, "kw": core.guess_keyword(p, text)}
+            self._refresh_row(iid)
+        self._summary()
+
+    def add_files(self):
+        self.add_paths(filedialog.askopenfilenames(filetypes=[("메모장", "*.txt"), ("모든 파일", "*.*")]))
+
+    def add_folder(self):
+        d = filedialog.askdirectory()
+        if d:
+            self.add_paths([d])
+
+    def remove_sel(self):
+        for iid in self.tree.selection():
+            self.tree.delete(iid)
+            self.docs.pop(iid, None)
+        self._summary()
+
+    def clear(self):
+        self.tree.delete(*self.tree.get_children())
+        self.docs.clear()
+        self.preview.delete("1.0", "end")
+        self._summary()
+
+    def reload(self):
+        for iid, d in self.docs.items():
+            d["text"] = read_text_file(d["path"])
+        self.refresh_all()
+
+    # ── 계산 ──
+    def _forbidden_words(self):
+        return [w.strip() for w in self.forbid.get().split(",") if w.strip()]
+
+    def _refresh_row(self, iid):
+        d = self.docs[iid]
+        st = core.count_stats(d["text"], [])
+        kws = core.count_keywords(d["text"], d["kw"])
+        kwn = " / ".join(f"{n}개" if len(kws) == 1 else f"{k} {n}개" for k, n in kws) or "-"
+        bad = core.count_forbidden(d["text"], self._forbidden_words())
+        badtxt = "  ".join(f"{w}:{n}개" for w, n in bad) if bad else "없음"
+        tags = ("bad",) if bad else (("nokw",) if not kws or any(n == 0 for _, n in kws) else ())
+        self.tree.item(iid, values=(os.path.basename(d["path"]), d["kw"], kwn,
+                                    f"{st['no_space']:,}", f"{st['with_space']:,}", badtxt), tags=tags)
+
+    def refresh_all(self):
+        self.app.settings["forbidden"] = self.forbid.get()
+        for iid in self.docs:
+            self._refresh_row(iid)
+        self._show_preview()
+        self._summary()
+
+    def _summary(self):
+        n = len(self.docs)
+        bad = sum(1 for i in self.docs if "bad" in self.tree.item(i, "tags"))
+        self.summary.config(text=f"파일 {n}개" + (f"  ·  금지어 들어간 파일 {bad}개" if bad else ""))
+
+    # ── 키워드 수정 ──
+    def _dbl(self, e):
+        iid = self.tree.identify_row(e.y)
+        col = self.tree.identify_column(e.x)
+        if not iid or col != "#2":
+            return
+        x, y, w, h = self.tree.bbox(iid, col)
+        ent = ttk.Entry(self.tree)
+        ent.insert(0, self.docs[iid]["kw"])
+        ent.select_range(0, "end")
+        ent.place(x=x, y=y, width=w, height=h)
+        ent.focus_set()
+
+        def done(save):
+            if save:
+                self.docs[iid]["kw"] = ent.get().strip()
+                self._refresh_row(iid)
+                self._show_preview()
+            ent.destroy()
+        ent.bind("<Return>", lambda ev: done(True))
+        ent.bind("<FocusOut>", lambda ev: done(True))
+        ent.bind("<Escape>", lambda ev: done(False))
+
+    def _apply_kw(self):
+        sel = self.tree.selection()
+        for iid in sel:
+            self.docs[iid]["kw"] = self.kw_edit.get().strip()
+            self._refresh_row(iid)
+        self._show_preview()
+
+    def _show_preview(self):
+        sel = self.tree.selection()
+        self.preview.delete("1.0", "end")
+        if not sel or sel[0] not in self.docs:
+            return
+        d = self.docs[sel[0]]
+        self.kw_edit.set(d["kw"])
+        self.preview.insert("1.0", d["text"])
+        words = [(k, "kw") for k, _ in core.count_keywords(d["text"], d["kw"])]
+        words += [(w, "bad") for w in self._forbidden_words()]
+        for word, tag in words:
+            start = "1.0"
+            while True:
+                pos = self.preview.search(word, start, stopindex="end")
+                if not pos:
+                    break
+                end = f"{pos}+{len(word)}c"
+                self.preview.tag_add(tag, pos, end)
+                start = end
+
+    def copy_table(self):
+        lines = ["\t".join(c[1].split(" (")[0] for c in self.COLS)]
+        for iid in self.tree.get_children():
+            lines.append("\t".join(str(v) for v in self.tree.item(iid, "values")))
+        copy_to_clipboard(self.app.root, "\n".join(lines))
+        self.app.status("표를 복사했습니다. 엑셀에 바로 붙여넣을 수 있어요.")
 
 
 def read_text_file(p):
@@ -263,6 +419,7 @@ def read_text_file(p):
         except Exception:
             continue
     return ""
+
 
 
 # ════════════════════════════ 이미지 관리 ════════════════════════════
@@ -300,6 +457,7 @@ class ImageTab(ttk.Frame):
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         body.add(lf, weight=3)
+        enable_drop(self.tree, self._drop)
 
         opt = ttk.Frame(body, padding=(10, 0))
         body.add(opt, weight=2)
@@ -380,6 +538,12 @@ class ImageTab(ttk.Frame):
             self.tree.insert("", "end", iid=p, values=(os.path.basename(p), sz, os.path.dirname(p)))
         self.count_lbl.config(text=f"{len(self.files)}개")
         self._preview()
+
+    def _drop(self, paths):
+        out = []
+        for p in paths:
+            out += core.list_images(p, self.sub_var.get()) if os.path.isdir(p) else [p]
+        self._add(out)
 
     def _add_files(self):
         ps = filedialog.askopenfilenames(filetypes=[("이미지", "*.jpg *.jpeg *.png *.webp *.bmp *.gif *.tif *.tiff"),
@@ -496,279 +660,350 @@ class ImageTab(ttk.Frame):
         self.after(80, self._poll)
 
 
-# ════════════════════════════ 화면 캡쳐 ════════════════════════════
-
-def virtual_screen():
-    """(left, top, width, height) 모든 모니터를 합친 영역"""
-    if sys.platform == "win32":
-        import ctypes
-        u = ctypes.windll.user32
-        return u.GetSystemMetrics(76), u.GetSystemMetrics(77), u.GetSystemMetrics(78), u.GetSystemMetrics(79)
-    return 0, 0, 1920, 1080
 
 
-def primary_screen():
-    if sys.platform == "win32":
-        import ctypes
-        u = ctypes.windll.user32
-        return 0, 0, u.GetSystemMetrics(0), u.GetSystemMetrics(1)
-    return 0, 0, 1920, 1080
+# ════════════════════════════ 이미지 캡쳐 / 썸네일 ════════════════════════════
+
+META = "_정보.json"
 
 
-def grab(bbox):
-    from PIL import ImageGrab
-    x, y, w, h = bbox
-    return ImageGrab.grab(bbox=(x, y, x + w, y + h), all_screens=True)
+class LibraryTab(ttk.Frame):
+    """폴더를 끌어다 놓으면 '내 문서\\업무도우미'에 보관하고,
+    요청한 장수만큼 랜덤하게 잘라·색감 미세조정·메타 교체해서 바탕화면에 저장"""
 
-
-class RegionPicker(tk.Toplevel):
-    """화면 위에 반투명 판을 깔고 드래그로 영역 선택"""
-
-    def __init__(self, root, callback):
-        super().__init__(root)
-        from PIL import ImageTk, ImageEnhance
-        self.callback = callback
-        vx, vy, vw, vh = virtual_screen()
-        self.vx, self.vy = vx, vy
-        shot = grab((vx, vy, vw, vh))
-        self.bg = ImageTk.PhotoImage(ImageEnhance.Brightness(shot).enhance(0.55))
-        self.bright = ImageTk.PhotoImage(shot)
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
-        self.geometry(f"{vw}x{vh}+{vx}+{vy}")
-        self.c = tk.Canvas(self, width=vw, height=vh, highlightthickness=0, cursor="cross")
-        self.c.pack()
-        self.c.create_image(0, 0, image=self.bg, anchor="nw")
-        self.crop = self.c.create_image(0, 0, image=self.bright, anchor="nw", state="hidden")
-        self.rect = self.c.create_rectangle(0, 0, 0, 0, outline="#ff3b30", width=2)
-        self.info = self.c.create_text(20, 20, anchor="nw", fill="white", font=("맑은 고딕", 14, "bold"),
-                                       text="드래그해서 캡쳐할 영역을 선택하세요  (ESC 취소)")
-        self.start = None
-        self.c.bind("<ButtonPress-1>", self._down)
-        self.c.bind("<B1-Motion>", self._move)
-        self.c.bind("<ButtonRelease-1>", self._up)
-        self.bind("<Escape>", lambda e: self._finish(None))
-        self.focus_force()
-        self.grab_set()
-
-    def _down(self, e):
-        self.start = (e.x, e.y)
-
-    def _move(self, e):
-        if not self.start:
-            return
-        x0, y0 = self.start
-        self.c.coords(self.rect, x0, y0, e.x, e.y)
-        w, h = abs(e.x - x0), abs(e.y - y0)
-        self.c.itemconfig(self.info, text=f"{w} × {h}")
-        self.c.coords(self.info, min(x0, e.x), max(0, min(y0, e.y) - 28))
-
-    def _up(self, e):
-        if not self.start:
-            return
-        x0, y0 = self.start
-        x1, y1 = min(x0, e.x), min(y0, e.y)
-        w, h = abs(e.x - x0), abs(e.y - y0)
-        if w < 5 or h < 5:
-            self.start = None
-            return
-        self._finish((x1 + self.vx, y1 + self.vy, w, h))
-
-    def _finish(self, region):
-        self.grab_release()
-        self.destroy()
-        self.callback(region)
-
-
-class CaptureTab(ttk.Frame):
-    def __init__(self, master, app):
-        super().__init__(master, padding=12)
+    def __init__(self, master, app, kind):
+        super().__init__(master, padding=8)
         self.app = app
+        self.kind = kind  # "image" | "thumb"
+        self.is_img = kind == "image"
+        sub = "병원이미지" if self.is_img else "썸네일"
+        self.lib = os.path.join(known_folder("documents"), "업무도우미", sub)
+        os.makedirs(self.lib, exist_ok=True)
+        self.q = queue.Queue()
+        self.worker = None
+        self.last_out = None
         s = app.settings
-        self.region = tuple(s["cap_region"]) if s.get("cap_region") else None
-        self.running = False
-        self.job = None
-        self.count = 0
-        self.prev = None
-        self.seq = s.get("cap_seq", 1)
 
-        g1 = ttk.LabelFrame(self, text=" 캡쳐 범위 ", padding=10)
+        # ── 왼쪽: 보관 목록 ──
+        body = ttk.PanedWindow(self, orient="horizontal")
+        body.pack(fill="both", expand=True)
+        left = ttk.Frame(body)
+        body.add(left, weight=3)
+        what = "병원·시술별 이미지 폴더" if self.is_img else "병원별 썸네일 폴더"
+        ttk.Label(left, text=f"{what}를 {drop_hint()}'폴더 추가'를 누르세요. 폴더 여러 개를 한 번에 넣어도 됩니다.",
+                  foreground=GRAY).pack(anchor="w")
+        tf = ttk.Frame(left)
+        tf.pack(fill="both", expand=True, pady=6)
+        cols = [("h", "병원명", 160)] + ([("p", "시술명", 160)] if self.is_img else []) + [("n", "이미지 수", 70)]
+        self.tree = ttk.Treeview(tf, columns=[c[0] for c in cols], show="headings", selectmode="extended")
+        for cid, t, w in cols:
+            self.tree.heading(cid, text=t)
+            self.tree.column(cid, width=w, anchor="center" if cid == "n" else "w")
+        sb = ttk.Scrollbar(tf, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._on_select())
+        lb = ttk.Frame(left)
+        lb.pack(fill="x")
+        ttk.Button(lb, text="폴더 추가", command=self._add_folder).pack(side="left")
+        ttk.Button(lb, text="선택 항목에 사진 추가", command=self._add_to_selected).pack(side="left", padx=4)
+        ttk.Button(lb, text="선택 삭제", command=self._delete).pack(side="left")
+        ttk.Button(lb, text="보관 폴더 열기", command=lambda: open_folder(self.lib)).pack(side="right")
+        enable_drop(self.tree, self._dropped)
+        enable_drop(left, self._dropped)
+
+        # ── 오른쪽: 이름 · 만들기 ──
+        right = ttk.Frame(body, padding=(12, 0))
+        body.add(right, weight=2)
+
+        g1 = ttk.LabelFrame(right, text=" 선택한 항목 이름 ", padding=8)
         g1.pack(fill="x")
-        self.area = tk.StringVar(value=s.get("cap_area", "지정 영역"))
-        for i, name in enumerate(("지정 영역", "주 모니터", "모든 모니터")):
-            ttk.Radiobutton(g1, text=name, value=name, variable=self.area).grid(row=0, column=i, padx=6, sticky="w")
-        ttk.Button(g1, text="영역 선택", command=self._pick).grid(row=0, column=3, padx=12)
-        self.region_lbl = ttk.Label(g1, text="")
-        self.region_lbl.grid(row=0, column=4, sticky="w")
-        self._show_region()
+        self.h_var = tk.StringVar()
+        self.p_var = tk.StringVar()
+        ttk.Label(g1, text="병원명").grid(row=0, column=0, sticky="w")
+        ttk.Entry(g1, textvariable=self.h_var, width=24).grid(row=0, column=1, sticky="we", padx=6, pady=2)
+        if self.is_img:
+            ttk.Label(g1, text="시술명").grid(row=1, column=0, sticky="w")
+            ttk.Entry(g1, textvariable=self.p_var, width=24).grid(row=1, column=1, sticky="we", padx=6, pady=2)
+        ttk.Button(g1, text="이름 저장", command=self._rename).grid(row=0, column=2, rowspan=2, padx=4)
+        g1.columnconfigure(1, weight=1)
 
-        g2 = ttk.LabelFrame(self, text=" 반복 설정 ", padding=10)
+        g2 = ttk.LabelFrame(right, text=" 만들기 ", padding=8)
         g2.pack(fill="x", pady=10)
-        ttk.Label(g2, text="간격(초)").grid(row=0, column=0, sticky="w")
-        self.interval = tk.DoubleVar(value=s.get("cap_interval", 2.0))
-        ttk.Spinbox(g2, from_=0.2, to=3600, increment=0.5, textvariable=self.interval, width=7).grid(row=0, column=1, padx=6)
-        ttk.Label(g2, text="장수(0 = 멈출 때까지)").grid(row=0, column=2, sticky="w", padx=(16, 0))
-        self.max_n = tk.IntVar(value=s.get("cap_max", 0))
-        ttk.Spinbox(g2, from_=0, to=100000, textvariable=self.max_n, width=7).grid(row=0, column=3, padx=6)
-        self.skip_same = tk.BooleanVar(value=s.get("cap_skip", True))
-        ttk.Checkbutton(g2, text="화면이 그대로면 저장 안 함", variable=self.skip_same).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        self.minimize = tk.BooleanVar(value=s.get("cap_min", True))
-        ttk.Checkbutton(g2, text="시작하면 이 창 최소화", variable=self.minimize).grid(row=1, column=2, columnspan=2, sticky="w", pady=(8, 0))
+        key = "img" if self.is_img else "th"
+        ttk.Label(g2, text="장수").grid(row=0, column=0, sticky="w")
+        self.count = tk.IntVar(value=s.get(f"{key}_count", 10))
+        ttk.Spinbox(g2, from_=1, to=500, textvariable=self.count, width=6).grid(row=0, column=1, sticky="w", padx=6)
+        ttk.Label(g2, text="긴 변 크기(px)").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        rng = ttk.Frame(g2)
+        rng.grid(row=1, column=1, sticky="w", padx=6, pady=(6, 0))
+        dmin, dmax = (800, 900) if self.is_img else (750, 950)
+        self.lmin = tk.IntVar(value=s.get(f"{key}_min", dmin))
+        self.lmax = tk.IntVar(value=s.get(f"{key}_max", dmax))
+        ttk.Spinbox(rng, from_=100, to=5000, textvariable=self.lmin, width=6).pack(side="left")
+        ttk.Label(rng, text=" ~ ").pack(side="left")
+        ttk.Spinbox(rng, from_=100, to=5000, textvariable=self.lmax, width=6).pack(side="left")
+        desc = ("자르는 위치·크기·비율을 매번 다르게, 밝기·대비 약 1%, 채도 1~2%, 감마 1~3%를 무작위로 틀고,\n"
+                "원본 메타데이터는 지운 뒤 새 날짜·고유번호로 저장합니다.")
+        ttk.Label(g2, text=desc, foreground=GRAY, justify="left").grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.where = ttk.Label(g2, text="", foreground="#0a5", justify="left")
+        self.where.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
-        g3 = ttk.LabelFrame(self, text=" 저장 ", padding=10)
-        g3.pack(fill="x")
-        ttk.Label(g3, text="폴더").grid(row=0, column=0, sticky="w")
-        default_dir = os.path.join(os.path.expanduser("~"), "Pictures", "업무캡쳐")
-        self.out_dir = tk.StringVar(value=s.get("cap_out", default_dir))
-        ttk.Entry(g3, textvariable=self.out_dir, width=50).grid(row=0, column=1, columnspan=3, sticky="we", padx=6)
-        ttk.Button(g3, text="찾기", command=self._pick_dir).grid(row=0, column=4)
-        ttk.Button(g3, text="열기", command=lambda: (os.makedirs(self.out_dir.get(), exist_ok=True),
-                                                    open_folder(self.out_dir.get()))).grid(row=0, column=5, padx=4)
-        ttk.Label(g3, text="파일 이름 앞부분").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        self.prefix = tk.StringVar(value=s.get("cap_prefix", "캡쳐"))
-        ttk.Entry(g3, textvariable=self.prefix, width=16).grid(row=1, column=1, sticky="w", padx=6, pady=(8, 0))
-        ttk.Label(g3, text="형식").grid(row=1, column=2, sticky="e", pady=(8, 0))
-        self.fmt = tk.StringVar(value=s.get("cap_fmt", "PNG"))
-        ttk.Combobox(g3, textvariable=self.fmt, values=["PNG", "JPG"], state="readonly", width=6).grid(
-            row=1, column=3, sticky="w", padx=6, pady=(8, 0))
-        g3.columnconfigure(1, weight=1)
+        self.run_btn = ttk.Button(right, text="  선택 항목 만들기  ", command=self._run)
+        self.run_btn.pack(fill="x")
+        ttk.Label(right, text="여러 항목을 선택하면 항목마다 따로 폴더를 만듭니다.", foreground=GRAY).pack(anchor="w", pady=(4, 8))
+        self.prog = ttk.Progressbar(right, mode="determinate")
+        self.prog.pack(fill="x")
+        self.result = ttk.Label(right, text="", justify="left")
+        self.result.pack(anchor="w", pady=6)
+        self.open_btn = ttk.Button(right, text="결과 폴더 열기", command=lambda: self.last_out and open_folder(self.last_out),
+                                   state="disabled")
+        self.open_btn.pack(anchor="w")
 
-        bar = ttk.Frame(self)
-        bar.pack(fill="x", pady=14)
-        self.start_btn = ttk.Button(bar, text="  반복 캡쳐 시작  ", command=self.toggle)
-        self.start_btn.pack(side="left")
-        ttk.Button(bar, text="  지금 1장  ", command=self.capture_once).pack(side="left", padx=8)
-        self.state_lbl = ttk.Label(bar, text="대기 중", font=FONT_B)
-        self.state_lbl.pack(side="left", padx=12)
+        self.reload()
 
-        hk = ("단축키:  F9 = 지금 1장   ·   F10 = 반복 캡쳐 시작/멈춤   (다른 프로그램을 보고 있어도 동작)"
-              if pkeyboard else "단축키를 쓸 수 없는 환경입니다. 버튼으로 사용해주세요.")
-        ttk.Label(self, text=hk, foreground="#666").pack(anchor="w")
-        self.last_lbl = ttk.Label(self, text="", foreground="#0a5")
-        self.last_lbl.pack(anchor="w", pady=(6, 0))
+    # ── 보관 목록 ──
+    def _read_meta(self, d):
+        try:
+            with open(os.path.join(d, META), encoding="utf-8") as f:
+                m = json.load(f)
+        except Exception:
+            m = {}
+        name = os.path.basename(d)
+        return {"hospital": m.get("hospital", name), "procedure": m.get("procedure", "")}
 
-    def _show_region(self):
-        if self.region:
-            x, y, w, h = self.region
-            self.region_lbl.config(text=f"선택됨: {w}×{h}  (위치 {x},{y})")
-        else:
-            self.region_lbl.config(text="아직 선택 안 함")
+    def _write_meta(self, d, h, p):
+        with open(os.path.join(d, META), "w", encoding="utf-8") as f:
+            json.dump({"hospital": h, "procedure": p}, f, ensure_ascii=False)
 
-    def _pick(self):
-        self.app.root.withdraw()
-        self.app.root.after(250, lambda: RegionPicker(self.app.root, self._picked))
+    def reload(self, select=None):
+        self.tree.delete(*self.tree.get_children())
+        for name in sorted(os.listdir(self.lib)):
+            d = os.path.join(self.lib, name)
+            if not os.path.isdir(d):
+                continue
+            m = self._read_meta(d)
+            n = len(core.list_images(d))
+            vals = (m["hospital"], m["procedure"], n) if self.is_img else (m["hospital"], n)
+            self.tree.insert("", "end", iid=d, values=vals)
+        if select and self.tree.exists(select):
+            self.tree.selection_set(select)
+            self.tree.see(select)
+        self._on_select()
 
-    def _picked(self, region):
-        self.app.root.deiconify()
-        if region:
-            self.region = region
-            self.area.set("지정 영역")
-            self.app.settings["cap_region"] = list(region)
-        self._show_region()
+    def _guess_names(self, folder_name):
+        name = folder_name.strip()
+        if self.is_img:
+            parts = [x for x in __import__("re").split(r"\s*[-_]\s*|\s+", name) if x]
+            if len(parts) >= 2:
+                return parts[0], " ".join(parts[1:])
+            return name, ""
+        for w in ("썸네일", "썸넬"):
+            name = name.replace(w, "")
+        return name.strip(" -_") or folder_name, ""
 
-    def _pick_dir(self):
+    def _safe(self, s):
+        return "".join("_" if c in '\\/:*?"<>|' else c for c in s).strip() or "이름없음"
+
+    def _new_group(self, h, p, files):
+        base = self._safe(f"{h} {p}".strip())
+        d = os.path.join(self.lib, base)
+        n = 2
+        while os.path.exists(d):
+            d = os.path.join(self.lib, f"{base} ({n})")
+            n += 1
+        os.makedirs(d)
+        self._write_meta(d, h, p)
+        self._copy_into(d, files)
+        return d
+
+    def _copy_into(self, d, files):
+        for f in files:
+            dst = core._unique(os.path.join(d, os.path.basename(f)))
+            shutil.copy2(f, dst)
+
+    def _dropped(self, paths):
+        groups = []
+        loose = []
+        for p in paths:
+            if os.path.isdir(p):
+                imgs = core.list_images(p)
+                if imgs:
+                    groups.append((os.path.basename(os.path.normpath(p)), imgs))
+                else:  # 상위 폴더를 넣은 경우: 하위 폴더 하나하나를 항목으로
+                    for sub in sorted(os.listdir(p)):
+                        sp = os.path.join(p, sub)
+                        if os.path.isdir(sp):
+                            si = core.list_images(sp, recursive=True)
+                            if si:
+                                groups.append((sub, si))
+            elif os.path.splitext(p)[1].lower() in core.IMAGE_EXT:
+                loose.append(p)
+        if loose:
+            sel = self.tree.selection()
+            if len(sel) == 1 and messagebox.askyesno(APP_NAME, "선택한 항목에 사진을 추가할까요?\n(아니요 = 새 항목으로 만들기)"):
+                self._copy_into(sel[0], loose)
+                self.reload(select=sel[0])
+                return
+            groups.append((os.path.basename(os.path.dirname(loose[0])), loose))
+        if not groups:
+            messagebox.showinfo(APP_NAME, "이미지가 들어 있는 폴더를 넣어주세요.")
+            return
+        self.app.root.config(cursor="watch")
+        self.app.root.update()
+        last = None
+        try:
+            for name, files in groups:
+                h, p = self._guess_names(name)
+                last = self._new_group(h, p, files)
+        finally:
+            self.app.root.config(cursor="")
+        self.reload(select=last)
+        self.app.status(f"{len(groups)}개 항목을 보관했습니다. 이름이 맞는지 확인해주세요.")
+
+    def _add_folder(self):
         d = filedialog.askdirectory()
         if d:
-            self.out_dir.set(d)
+            self._dropped([d])
 
-    def _bbox(self):
-        a = self.area.get()
-        if a == "주 모니터":
-            return primary_screen()
-        if a == "모든 모니터":
-            return virtual_screen()
-        return self.region
+    def _add_to_selected(self):
+        sel = self.tree.selection()
+        if len(sel) != 1:
+            messagebox.showinfo(APP_NAME, "사진을 넣을 항목 하나를 먼저 선택해주세요.")
+            return
+        fs = filedialog.askopenfilenames(filetypes=[("이미지", "*.jpg *.jpeg *.png *.webp *.bmp *.gif"), ("모든 파일", "*.*")])
+        if fs:
+            self._copy_into(sel[0], fs)
+            self.reload(select=sel[0])
 
-    def _remember(self):
-        s = self.app.settings
-        s.update(cap_area=self.area.get(), cap_interval=float(self.interval.get()), cap_max=int(self.max_n.get()),
-                 cap_skip=self.skip_same.get(), cap_min=self.minimize.get(), cap_out=self.out_dir.get(),
-                 cap_prefix=self.prefix.get(), cap_fmt=self.fmt.get(), cap_seq=self.seq)
+    def _delete(self):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        if not messagebox.askyesno(APP_NAME, f"선택한 {len(sel)}개 항목을 보관함에서 지울까요?\n(처음 넣었던 원본 폴더는 그대로 남습니다)"):
+            return
+        for d in sel:
+            shutil.rmtree(d, ignore_errors=True)
+        self.reload()
 
-    def _save_shot(self, check_same=False):
-        bbox = self._bbox()
-        if not bbox:
-            self.app.root.deiconify()
-            messagebox.showinfo(APP_NAME, "'영역 선택'으로 캡쳐할 부분을 먼저 정해주세요.")
-            return False
-        img = grab(bbox)
-        if check_same and self.prev is not None:
-            from PIL import ImageChops
-            if img.size == self.prev.size and ImageChops.difference(img.convert("RGB"), self.prev.convert("RGB")).getbbox() is None:
-                return None
-        self.prev = img
-        d = self.out_dir.get().strip()
-        os.makedirs(d, exist_ok=True)
-        ext = ".jpg" if self.fmt.get() == "JPG" else ".png"
-        name = f"{self.prefix.get().strip() or '캡쳐'}_{datetime.now():%Y%m%d}_{self.seq:04d}{ext}"
-        path = core._unique(os.path.join(d, name))
-        if ext == ".jpg":
-            img.convert("RGB").save(path, "JPEG", quality=92)
+    def _on_select(self):
+        sel = self.tree.selection()
+        if len(sel) == 1:
+            m = self._read_meta(sel[0])
+            self.h_var.set(m["hospital"])
+            self.p_var.set(m["procedure"])
         else:
-            img.save(path, "PNG")
-        self.seq += 1
-        self.last_lbl.config(text=f"저장: {os.path.basename(path)}")
-        return True
+            self.h_var.set("")
+            self.p_var.set("")
+        self.where.config(text=self._where_text(sel))
 
-    def capture_once(self):
-        try:
-            self._remember()
-            self._save_shot()
-        except Exception as e:
-            messagebox.showerror(APP_NAME, f"캡쳐 실패: {e}")
+    def _out_base(self, d):
+        m = self._read_meta(d)
+        if self.is_img:
+            return self._safe(f"{m['hospital']} {m['procedure']}".strip())
+        return self._safe(f"{m['hospital']} 썸넬")
 
-    def toggle(self):
-        if self.running:
-            self.stop()
-        else:
-            self.start()
+    def _where_text(self, sel):
+        if not sel:
+            return "항목을 선택하면 저장 위치가 여기 표시됩니다."
+        ex = os.path.basename(core.next_numbered_dir(known_folder("desktop"), self._out_base(sel[0])))
+        tail = "\\output\\" if self.is_img else "\\"
+        more = f"  외 {len(sel) - 1}개" if len(sel) > 1 else ""
+        return f"저장 위치: 바탕화면\\{ex}{tail}{more}"
 
-    def start(self):
-        if not self._bbox():
-            messagebox.showinfo(APP_NAME, "'영역 선택'으로 캡쳐할 부분을 먼저 정해주세요.")
+    def _rename(self):
+        sel = self.tree.selection()
+        if len(sel) != 1:
+            messagebox.showinfo(APP_NAME, "이름을 바꿀 항목 하나를 선택해주세요.")
+            return
+        d = sel[0]
+        h, p = self.h_var.get().strip(), self.p_var.get().strip()
+        if not h:
+            messagebox.showinfo(APP_NAME, "병원명을 입력해주세요.")
+            return
+        self._write_meta(d, h, p)
+        target = os.path.join(self.lib, self._safe(f"{h} {p}".strip()))
+        if os.path.normcase(target) != os.path.normcase(d) and not os.path.exists(target):
+            try:
+                os.rename(d, target)
+                d = target
+            except OSError:
+                pass
+        self.reload(select=d)
+
+    # ── 만들기 ──
+    def _run(self):
+        if self.worker and self.worker.is_alive():
+            return
+        sel = list(self.tree.selection())
+        if not sel:
+            messagebox.showinfo(APP_NAME, "만들 항목을 먼저 선택해주세요.")
             return
         try:
-            self._remember()
+            count, lo, hi = int(self.count.get()), int(self.lmin.get()), int(self.lmax.get())
         except Exception:
-            messagebox.showwarning(APP_NAME, "간격·장수 숫자를 확인해주세요.")
+            messagebox.showwarning(APP_NAME, "숫자 칸을 확인해주세요.")
             return
-        self.running = True
-        self.count = 0
-        self.prev = None
-        self.start_btn.config(text="  멈춤  ")
-        self.state_lbl.config(text="캡쳐 중...", foreground="#d00")
-        if self.minimize.get():
-            self.app.root.iconify()
-        self.job = self.after(400, self._tick)
+        if lo > hi:
+            lo, hi = hi, lo
+        key = "img" if self.is_img else "th"
+        self.app.settings.update({f"{key}_count": count, f"{key}_min": lo, f"{key}_max": hi})
+        jobs = []
+        for d in sel:
+            files = core.list_images(d)
+            if files:
+                jobs.append((d, files))
+        if not jobs:
+            messagebox.showinfo(APP_NAME, "선택한 항목에 이미지가 없습니다.")
+            return
+        desktop = known_folder("desktop")
+        self.prog.config(maximum=count * len(jobs), value=0)
+        self.run_btn.config(state="disabled")
+        self.result.config(text="만드는 중...")
 
-    def _tick(self):
-        if not self.running:
-            return
+        def work():
+            done = 0
+            outs = []
+            try:
+                for d, files in jobs:
+                    top = core.next_numbered_dir(desktop, self._out_base(d))
+                    out = os.path.join(top, "output") if self.is_img else top
+                    base = done
+                    core.generate_set(files, out, count, lo, hi,
+                                      progress=lambda i, b=base: self.q.put(("prog", b + i)))
+                    done += count
+                    outs.append(out)
+                self.q.put(("done", outs, None))
+            except Exception as e:
+                self.q.put(("done", outs, str(e)))
+
+        self.worker = threading.Thread(target=work, daemon=True)
+        self.worker.start()
+        self._poll()
+
+    def _poll(self):
         try:
-            r = self._save_shot(check_same=self.skip_same.get())
-            if r:
-                self.count += 1
-            self.state_lbl.config(text=f"캡쳐 중... {self.count}장")
-        except Exception as e:
-            self.stop()
-            messagebox.showerror(APP_NAME, f"캡쳐 실패: {e}")
-            return
-        mx = int(self.max_n.get() or 0)
-        if mx and self.count >= mx:
-            self.stop()
-            return
-        ms = max(200, int(float(self.interval.get()) * 1000))
-        self.job = self.after(ms, self._tick)
-
-    def stop(self):
-        self.running = False
-        if self.job:
-            self.after_cancel(self.job)
-            self.job = None
-        self.start_btn.config(text="  반복 캡쳐 시작  ")
-        self.state_lbl.config(text=f"멈춤 · {self.count}장 저장", foreground="")
-        self._remember()
-        self.app.root.deiconify()
+            while True:
+                msg = self.q.get_nowait()
+                if msg[0] == "prog":
+                    self.prog["value"] = msg[1]
+                else:
+                    _, outs, err = msg
+                    self.run_btn.config(state="normal")
+                    names = "\n".join("바탕화면\\" + os.path.relpath(o, known_folder("desktop")) for o in outs)
+                    self.result.config(text=(f"완료: {len(outs)}개 폴더\n{names}" if outs else "") +
+                                       (f"\n오류: {err}" if err else ""))
+                    if outs:
+                        self.last_out = outs[-1]
+                        self.open_btn.config(state="normal")
+                    self._on_select()
+                    if err:
+                        messagebox.showerror(APP_NAME, f"만드는 중 문제가 생겼습니다.\n{err}")
+                    return
+        except queue.Empty:
+            pass
+        self.after(80, self._poll)
 
 
 # ════════════════════════════ 메인 창 ════════════════════════════
@@ -778,8 +1013,8 @@ class App:
         self.root = root
         self.settings = load_settings()
         root.title(f"{APP_NAME} {VERSION}")
-        root.geometry(self.settings.get("geometry", "1100x720"))
-        root.minsize(900, 600)
+        root.geometry(self.settings.get("geometry", "1200x780"))
+        root.minsize(980, 640)
 
         style = ttk.Style()
         try:
@@ -788,6 +1023,7 @@ class App:
             pass
         root.option_add("*Font", FONT)
         style.configure(".", font=FONT)
+        style.configure("Treeview", rowheight=26)
         style.configure("Treeview.Heading", font=FONT_B)
         style.configure("TNotebook.Tab", padding=(14, 6))
 
@@ -795,51 +1031,27 @@ class App:
         nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self.text_tab = TextTab(nb, self)
         self.image_tab = ImageTab(nb, self)
-        self.capture_tab = CaptureTab(nb, self)
+        self.cap_tab = LibraryTab(nb, self, "image")
+        self.thumb_tab = LibraryTab(nb, self, "thumb")
         nb.add(self.text_tab, text="   텍스트 정리   ")
         nb.add(self.image_tab, text="   이미지 관리   ")
-        nb.add(self.capture_tab, text="   화면 캡쳐   ")
-        nb.select(self.settings.get("tab", 0))
+        nb.add(self.cap_tab, text="   이미지 캡쳐   ")
+        nb.add(self.thumb_tab, text="   썸네일   ")
+        try:
+            nb.select(self.settings.get("tab", 0))
+        except Exception:
+            pass
         self.nb = nb
 
         self.status_lbl = ttk.Label(root, text="준비", anchor="w", padding=(10, 4))
         self.status_lbl.pack(fill="x")
-
-        self.hk_q = queue.Queue()
-        self.listener = None
-        if pkeyboard:
-            try:
-                self.listener = pkeyboard.GlobalHotKeys({
-                    "<f9>": lambda: self.hk_q.put("once"),
-                    "<f10>": lambda: self.hk_q.put("toggle"),
-                })
-                self.listener.daemon = True
-                self.listener.start()
-            except Exception:
-                self.listener = None
-        self._poll_hotkeys()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-    def _poll_hotkeys(self):
-        try:
-            while True:
-                cmd = self.hk_q.get_nowait()
-                if cmd == "once":
-                    self.capture_tab.capture_once()
-                elif cmd == "toggle":
-                    self.capture_tab.toggle()
-        except queue.Empty:
-            pass
-        self.root.after(100, self._poll_hotkeys)
 
     def status(self, msg):
         self.status_lbl.config(text=msg)
 
     def on_close(self):
         try:
-            if self.capture_tab.running:
-                self.capture_tab.stop()
-            self.capture_tab._remember()
             self.image_tab._remember()
         except Exception:
             pass
@@ -849,27 +1061,36 @@ class App:
         except Exception:
             pass
         save_settings(self.settings)
-        if self.listener:
-            try:
-                self.listener.stop()
-            except Exception:
-                pass
         self.root.destroy()
 
 
 def main():
-    root = tk.Tk()
+    root = TkinterDnD.Tk() if TkinterDnD else tk.Tk()
     app = App(root)
     if "--selftest" in sys.argv:
-        # 빌드 확인용: 창을 띄웠다가 각 기능을 한 번씩 돌리고 종료
         def test():
-            app.text_tab.count_text.insert("1.0", "테스트 문장입니다. 키워드 테스트.")
-            app.text_tab._update_count()
-            app.text_tab.wrap_in.insert("1.0", "첫 문장입니다. 두 번째 문장은 조금 길게 써서 줄이 나뉘는지 봅니다.")
-            app.text_tab._do_wrap()
-            app.text_tab._do_report()
-            img = grab(primary_screen())
-            print("selftest ok", img.size, flush=True)
+            import tempfile
+            from PIL import Image
+            tmp = tempfile.mkdtemp()
+            # 원고 검사
+            p = os.path.join(tmp, "01_서울역피부과 원고.txt")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write("서울역피부과 안내입니다. 전문 상담과 자료를 준비했어요. 서울역피부과")
+            app.text_tab.check.add_paths([tmp])
+            row = app.text_tab.check.tree.item(app.text_tab.check.tree.get_children()[0], "values")
+            print("check:", row, flush=True)
+            # 순위 정리
+            app.text_tab.rank_in.insert("1.0", "서울역피부과\thttps://blog.naver.com/a/1\t8\t나음피부과")
+            app.text_tab._rank_changed()
+            print("rank:", app.text_tab.rank_out.get("1.0", "end-1c"), flush=True)
+            # 랜덤 캡쳐
+            src = os.path.join(tmp, "나음피부과-수술흉터제거")
+            os.makedirs(src)
+            Image.effect_mandelbrot((1400, 1000), (-2, -1.5, 1, 1.5), 60).convert("RGB").save(os.path.join(src, "a.jpg"))
+            made = core.generate_set(core.list_images(src), os.path.join(tmp, "out"), 3, 800, 900)
+            print("made:", [m[2] for m in made], flush=True)
+            print("dnd:", bool(TkinterDnD), "docs:", known_folder("documents"), "desktop:", known_folder("desktop"), flush=True)
+            print("selftest ok", flush=True)
             root.destroy()
         root.after(800, test)
     root.mainloop()
