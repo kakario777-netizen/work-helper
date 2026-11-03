@@ -180,6 +180,16 @@ _EXT_TO_FMT = {".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".webp": "WEBP",
                ".bmp": "BMP", ".gif": "GIF", ".tif": "TIFF", ".tiff": "TIFF"}
 
 
+def natural_key(path):
+    """사람이 보는 순서: 1, 2, 3 … 10, 11 (글자 순 1, 10, 11, 2 가 아니라)"""
+    return [(0, int(t), "") if t.isdigit() else (1, 0, t.lower())
+            for t in re.split(r"(\d+)", str(path)) if t]
+
+
+def natural_sorted(items):
+    return sorted(items, key=natural_key)
+
+
 def list_images(folder, recursive=False):
     found = []
     if recursive:
@@ -192,7 +202,7 @@ def list_images(folder, recursive=False):
             p = os.path.join(folder, f)
             if os.path.isfile(p) and os.path.splitext(f)[1].lower() in IMAGE_EXT:
                 found.append(p)
-    return sorted(found)
+    return natural_sorted(found)
 
 
 def build_name(pattern, stem, index, digits):

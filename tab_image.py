@@ -141,7 +141,7 @@ class ImageTab(ttk.Frame):
     # ── 목록 ──
     def _add(self, paths):
         known = set(self.files)
-        for p in paths:
+        for p in core.natural_sorted(paths):
             p = os.path.normpath(p)
             if p in known or os.path.splitext(p)[1].lower() not in core.IMAGE_EXT:
                 continue

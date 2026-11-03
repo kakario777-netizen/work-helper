@@ -203,7 +203,7 @@ class CheckPanel(ttk.Frame):
         for p in paths:
             if os.path.isdir(p):
                 for root, _, fs in os.walk(p):
-                    files += [os.path.join(root, f) for f in sorted(fs) if f.lower().endswith(".txt")]
+                    files += [os.path.join(root, f) for f in core.natural_sorted(fs) if f.lower().endswith(".txt")]
             elif p.lower().endswith(".txt"):
                 files.append(p)
         known = {d["path"] for d in self.docs.values()}

@@ -187,7 +187,7 @@ class LibraryTab(ttk.Frame):
 
     def reload(self, select=None):
         self.groups = []
-        for name in sorted(os.listdir(self.lib)):
+        for name in core.natural_sorted(os.listdir(self.lib)):
             d = os.path.join(self.lib, name)
             if os.path.isdir(d):
                 m = self._read_meta(d)
@@ -334,7 +334,7 @@ class LibraryTab(ttk.Frame):
                 if imgs:
                     groups.append((os.path.basename(os.path.normpath(p)), imgs))
                 else:  # 상위 폴더를 넣으면 하위 폴더 하나하나를 항목으로
-                    for sub in sorted(os.listdir(p)):
+                    for sub in core.natural_sorted(os.listdir(p)):
                         sp = os.path.join(p, sub)
                         if os.path.isdir(sp):
                             si = core.list_images(sp, recursive=True)
