@@ -377,7 +377,7 @@ def main():
             print("check:", chk.tree.item(chk.tree.get_children()[0], "values"), flush=True)
             # 보고서 정리
             app.text_tab.rank_in.insert("1.0", "서울역피부과\thttps://blog.naver.com/a/1\t8\t나음피부과")
-            app.text_tab._rank_changed()
+            app.text_tab._do_rank()
             print("report:", app.text_tab.rank_out.get("1.0", "end-1c"), flush=True)
             # 설정: 탭 숨기기·순서
             d = SettingsDialog(app)
@@ -399,6 +399,13 @@ def main():
             app.image_tab._add(core.list_images(src))
             app.image_tab.adjust.set({"brightness": 3, "hue": 2, "vignette": 10})
             app.image_tab._preview()
+            from common import CompareWindow
+            cw = CompareWindow(app.root, app.image_tab.files, 0, app.image_tab.adjust.get)
+            cw.update()
+            cw.render()
+            cw.step(1)
+            print("compare:", cw.i, "/", len(cw.files), flush=True)
+            cw.destroy()
             o = app.image_tab._opts()
             o["adjust"] = app.image_tab.adjust.get()
             os.makedirs(os.path.join(src, "output"), exist_ok=True)
@@ -408,7 +415,10 @@ def main():
             cap.lib = os.path.join(tmp, "lib")
             os.makedirs(cap.lib)
             cap._dropped([src])
-            print("grid tiles:", len(cap.tiles), "sel:", [os.path.basename(x) for x in cap.sel], flush=True)
+            cap._grid_w = 760
+            cap._cols = 0
+            cap._layout_grid()
+            print("grid tiles:", len(cap.tiles), "cols@760px:", cap._cols, "sel:", [os.path.basename(x) for x in cap.sel], flush=True)
             cap._randomize()
             kw = cap._params()
             print("random:", kw["lmin"], kw["lmax"], kw["tmin"], kw["tmax"], kw["aspect"], "micro", kw["micro"], flush=True)

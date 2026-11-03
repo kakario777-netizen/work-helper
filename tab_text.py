@@ -50,18 +50,28 @@ class TextTab(ttk.Frame):
         self.rank_out.configure(wrap="none")
         body.add(lf, weight=1)
         body.add(rf, weight=1)
-        self.rank_info = ttk.Label(f, text="")
+        self.rank_info = ttk.Label(f, text="", width=14, anchor="e")
         self.rank_info.pack(anchor="e", pady=(4, 0))
         self.rank_in.bind("<<Modified>>", self._rank_changed)
         return f
 
     def _rank_changed(self, _e=None):
+        # 타자 칠 때마다 바로 다시 그리면 화면이 흔들리므로, 손을 멈추면 한 번만 변환
         if not self.rank_in.edit_modified():
             return
         self.rank_in.edit_modified(False)
+        if getattr(self, "_rank_job", None):
+            self.after_cancel(self._rank_job)
+        self._rank_job = self.after(300, self._do_rank)
+
+    def _do_rank(self):
+        self._rank_job = None
         res = core.convert_rank(self.rank_in.get("1.0", "end-1c"))
-        self.rank_out.delete("1.0", "end")
-        self.rank_out.insert("1.0", res)
+        if res != self.rank_out.get("1.0", "end-1c"):
+            y = self.rank_out.yview()[0]
+            self.rank_out.delete("1.0", "end")
+            self.rank_out.insert("1.0", res)
+            self.rank_out.yview_moveto(y)
         n = len(res.splitlines()) if res else 0
         self.rank_info.config(text=f"{n}줄 변환")
 
@@ -87,7 +97,7 @@ class TextTab(ttk.Frame):
         rf, self.wrap_out = text_box(body)
         body.add(lf, weight=1)
         body.add(rf, weight=1)
-        self.wrap_info = ttk.Label(f, text="")
+        self.wrap_info = ttk.Label(f, text="", width=34, anchor="e")
         self.wrap_info.pack(anchor="e", pady=(4, 0))
         return f
 
@@ -135,7 +145,8 @@ class CheckPanel(ttk.Frame):
         self.forbid = tk.StringVar(value=app.settings.get("forbidden", "전문, 자료"))
         ttk.Entry(top, textvariable=self.forbid).pack(side="left", fill="x", expand=True, padx=6)
         ttk.Label(top, text="쉼표로 구분", foreground=GRAY).pack(side="left")
-        self.forbid.trace_add("write", lambda *a: self.refresh_all())
+        self._ref_job = None
+        self.forbid.trace_add("write", lambda *a: self._refresh_later())
 
         bar = ttk.Frame(self)
         bar.pack(fill="x", pady=(8, 4))
@@ -180,7 +191,7 @@ class CheckPanel(ttk.Frame):
         self.preview.tag_configure("bad", background="#ffd0d0", foreground="#c00")
         pw.add(pf, weight=1)
 
-        self.summary = ttk.Label(self, text="")
+        self.summary = ttk.Label(self, text="", width=40, anchor="w")
         self.summary.pack(anchor="w", pady=(4, 0))
 
         for w in (self.tree, self):
@@ -246,7 +257,13 @@ class CheckPanel(ttk.Frame):
         self.tree.item(iid, values=(os.path.basename(d["path"]), d["kw"], kwn,
                                     f"{st['no_space']:,}", f"{st['with_space']:,}", badtxt), tags=tags)
 
+    def _refresh_later(self):
+        if self._ref_job:
+            self.after_cancel(self._ref_job)
+        self._ref_job = self.after(400, self.refresh_all)
+
     def refresh_all(self):
+        self._ref_job = None
         self.app.settings["forbidden"] = self.forbid.get()
         for iid in self.docs:
             self._refresh_row(iid)
@@ -290,12 +307,19 @@ class CheckPanel(ttk.Frame):
 
     def _show_preview(self):
         sel = self.tree.selection()
-        self.preview.delete("1.0", "end")
         if not sel or sel[0] not in self.docs:
+            self.preview.delete("1.0", "end")
+            self._shown = None
             return
         d = self.docs[sel[0]]
         self.kw_edit.set(d["kw"])
-        self.preview.insert("1.0", d["text"])
+        # 같은 원고면 글은 그대로 두고 색칠만 다시 (깜빡임 방지)
+        if getattr(self, "_shown", None) != (sel[0], d["text"]):
+            self.preview.delete("1.0", "end")
+            self.preview.insert("1.0", d["text"])
+            self._shown = (sel[0], d["text"])
+        for tag in ("kw", "bad"):
+            self.preview.tag_remove(tag, "1.0", "end")
         words = [(k, "kw") for k, _ in core.count_keywords(d["text"], d["kw"])]
         words += [(w, "bad") for w in self._forbidden_words()]
         for word, tag in words:

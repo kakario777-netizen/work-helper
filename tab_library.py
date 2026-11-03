@@ -14,7 +14,7 @@ from common import (APP_NAME, GRAY, FONT, FONT_B, known_folder, enable_drop, dro
                     ScrollFrame, AdjustPanel, Preview, Paned, RandomRangeDialog)
 
 META = "_정보.json"
-TILE_W = 160
+TILE_MIN = 130
 SEL_BG, NORM_BG, ADD_BG = "#cfe3ff", "#f4f4f4", "#ffffff"
 
 
@@ -207,36 +207,56 @@ class LibraryTab(ttk.Frame):
         self._sync_selection()
 
     def _grid_resized(self, e):
-        cols = max(1, (e.width - 8) // (TILE_W + 10))
-        if cols != self._cols:
-            self._cols = cols
-            self._build_grid(force=True)
+        # 창 크기를 바꾸는 동안엔 계산을 미루고, 멈추면 한 번만 다시 배치
+        self._grid_w = e.width
+        if getattr(self, "_grid_job", None):
+            self.after_cancel(self._grid_job)
+        self._grid_job = self.after(90, self._layout_grid)
 
     def _build_grid(self, force=False):
+        """타일 만들기(목록이 바뀔 때만). 배치는 _layout_grid"""
         inner = self.grid_sf.inner
         for w in inner.winfo_children():
             w.destroy()
         self.tiles = {}
-        cols = self._cols or 3
-        items = list(self.groups) + [None]   # 마지막은 '추가' 빈칸
-        for i, g in enumerate(items):
-            r, c = divmod(i, cols)
+        self._tile_list = []
+        for g in list(self.groups) + [None]:   # 마지막은 '추가' 빈칸
             if g is None:
                 t = tk.Label(inner, text="+\n\n폴더를 끌어다 놓거나\n클릭해서 추가", bg=ADD_BG, fg="#888",
-                             relief="groove", bd=2, width=18, height=6, font=FONT, cursor="hand2")
+                             relief="groove", bd=2, width=1, height=6, font=FONT, cursor="hand2")
                 t.bind("<Button-1>", lambda e: self._add_folder())
+                enable_drop(t, self._dropped)
             else:
                 d, h, p, n = g
                 sub = p if self.is_img else "썸네일"
                 t = tk.Label(inner, text=f"{h}\n{sub}\n\n{n}장", bg=NORM_BG, relief="raised", bd=2,
-                             width=18, height=6, font=FONT, cursor="hand2", wraplength=TILE_W - 10)
+                             width=1, height=6, font=FONT, cursor="hand2", wraplength=TILE_MIN - 12)
                 t.bind("<Button-1>", lambda e, d=d: self._tile_click(e, d))
                 enable_drop(t, lambda paths, d=d: self._dropped(paths, target=d))
                 self.tiles[d] = t
-            t.grid(row=r, column=c, padx=5, pady=5, sticky="nsew")
-            if g is None:
-                enable_drop(t, self._dropped)
+            self._tile_list.append(t)
+        self._cols = 0
+        self._layout_grid()
         self._paint_tiles()
+
+    def _layout_grid(self):
+        """칸 너비에 맞춰 열 개수를 정하고, 타일이 빈틈없이 가로를 채우게"""
+        self._grid_job = None
+        inner = self.grid_sf.inner
+        w = getattr(self, "_grid_w", 0) or self.grid_sf.canvas.winfo_width()
+        cols = max(1, (w - 4) // (TILE_MIN + 8)) if w > 50 else 4
+        if cols == self._cols:
+            return
+        old = self._cols
+        self._cols = cols
+        for c in range(max(cols, old)):
+            if c < cols:
+                inner.columnconfigure(c, weight=1, uniform="tile", minsize=TILE_MIN)
+            else:
+                inner.columnconfigure(c, weight=0, uniform="", minsize=0)
+        for i, t in enumerate(self._tile_list):
+            r, c = divmod(i, cols)
+            t.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
 
     def _paint_tiles(self):
         for d, t in getattr(self, "tiles", {}).items():
@@ -456,7 +476,7 @@ class LibraryTab(ttk.Frame):
         if self.sel:
             imgs = core.list_images(self.sel[0])
             src = imgs[0] if imgs else None
-        self.preview.show(src, self.adjust.get())
+        self.preview.show(src, self.adjust.get, imgs if self.sel else [])
 
     # ══ 만들기 ══
     def _params(self):

@@ -188,7 +188,7 @@ class ImageTab(ttk.Frame):
 
     def _preview(self):
         sel = self.tree.selection()
-        self.preview.show(sel[0] if sel else None, self.adjust.get())
+        self.preview.show(sel[0] if sel else None, self.adjust.get, self.files)
 
     def _mode_changed(self):
         st = "normal" if self.out_mode.get() == "custom" else "disabled"

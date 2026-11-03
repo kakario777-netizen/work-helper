@@ -153,10 +153,18 @@ class ScrollFrame(ttk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.sb.pack(side="right", fill="y")
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._win, width=e.width))
+        self._wjob = None
+        self.canvas.bind("<Configure>", self._on_canvas)
         for w in (self.canvas, self.inner):
             w.bind("<Enter>", lambda e: self.canvas.bind_all("<MouseWheel>", self._wheel))
             w.bind("<Leave>", lambda e: self.canvas.unbind_all("<MouseWheel>"))
+
+    def _on_canvas(self, e):
+        # 창 크기를 바꾸는 동안 매번 안쪽을 다시 배치하면 버벅이므로 잠깐 모았다가 한 번에
+        if self._wjob:
+            self.after_cancel(self._wjob)
+        self._wjob = self.after(60, lambda w=e.width: (self.canvas.itemconfigure(self._win, width=w),
+                                                       setattr(self, "_wjob", None)))
 
     def _wheel(self, e):
         if self.inner.winfo_reqheight() > self.canvas.winfo_height():
@@ -244,7 +252,244 @@ class Paned(tk.PanedWindow):
     def __init__(self, master, app, key, orient="horizontal"):
         super().__init__(master, orient=orient, sashwidth=5, sashrelief="flat", sashpad=0,
                          showhandle=False, bg="#dcdfe3", bd=0,
-                         opaqueresize=True, sashcursor="sb_h_double_arrow" if orient == "horizontal" else "sb_v_double_arrow")
+                         opaqueresize=False, sashcursor="sb_h_double_arrow" if orient == "horizontal" else "sb_v_double_arrow")
+        self.app = app
+        self.key = key
+        PANES.append(self)
+        self._restored = False
+        self.bind("<Map>", lambda e: self.after(150, self._restore))
+
+    def add(self, child, weight=1, width=None, height=None, minsize=120):
+        opts = {"minsize": minsize, "stretch": "always" if weight else "never"}
+        if width:
+            opts["width"] = width
+        if height:
+            opts["height"] = height
+        super().add(child, **opts)
+
+    def _restore(self):
+        if self._restored:
+            return
+        self._restored = True
+        pos = self.app.settings.get("panes", {}).get(self.key)
+        if not pos:
+            return
+        for i, p in enumerate(pos):
+            try:
+                if self.cget("orient") == "horizontal":
+                    self.sash_place(i, int(p), 1)
+                else:
+                    self.sash_place(i, 1, int(p))
+            except Exception:
+                pass
+
+    def remember(self):
+        if not self._restored:
+            return
+        try:
+            n = len(self.panes()) - 1
+            i = 0 if self.cget("orient") == "horizontal" else 1
+            self.app.settings.setdefault("panes", {})[self.key] = [self.sash_coord(j)[i] for j in range(n)]
+        except Exception:
+            pass
+
+
+class RandomRangeDialog(tk.Toplevel):
+    """랜덤 버튼이 고를 범위(긴 변·테두리·비율)와 포함 여부"""
+
+    def __init__(self, parent, app, key, default):
+        super().__init__(parent)
+        self.app = app
+        self.key = key
+        self.title("랜덤 범위")
+        self.transient(parent.winfo_toplevel())
+        self.resizable(False, False)
+        cfg = dict(default)
+        cfg.update(app.settings.get(key, {}))
+        use = cfg.get("use", {"len": True, "trim": True, "aspect": True})
+        f = ttk.Frame(self, padding=16)
+        f.pack()
+        ttk.Label(f, text="'랜덤'을 누르면 아래 범위 안에서 값이 정해집니다.", foreground=GRAY).grid(
+            row=0, column=0, columnspan=5, sticky="w", pady=(0, 10))
+        self.v = {}
+        rows = (("len", "긴 변 크기 (px)", 1, 50, 6000), ("trim", "테두리 자르기 (px)", 1, 0, 200),
+                ("aspect", "가로·세로 비율 흔들림 (%)", 0.1, 0, 30))
+        for r, (k, name, inc, lo, hi) in enumerate(rows, start=1):
+            u = tk.BooleanVar(value=use.get(k, True))
+            ttk.Checkbutton(f, variable=u).grid(row=r, column=0, sticky="w")
+            ttk.Label(f, text=name, width=22).grid(row=r, column=1, sticky="w", pady=4)
+            a = tk.DoubleVar(value=cfg[k][0])
+            b = tk.DoubleVar(value=cfg[k][1])
+            ttk.Spinbox(f, from_=lo, to=hi, increment=inc, textvariable=a, width=7).grid(row=r, column=2)
+            ttk.Label(f, text="~").grid(row=r, column=3, padx=4)
+            ttk.Spinbox(f, from_=lo, to=hi, increment=inc, textvariable=b, width=7).grid(row=r, column=4)
+            self.v[k] = (u, a, b)
+        ttk.Label(f, text="왼쪽 체크를 끄면 그 항목은 랜덤 때 그대로 둡니다.", foreground=GRAY).grid(
+            row=5, column=0, columnspan=5, sticky="w", pady=(10, 0))
+        bar = ttk.Frame(f)
+        bar.grid(row=6, column=0, columnspan=5, sticky="e", pady=(12, 0))
+        ttk.Button(bar, text="처음값", command=lambda: self._fill(default)).pack(side="left")
+        ttk.Button(bar, text="저장", command=self._ok).pack(side="left", padx=6)
+        ttk.Button(bar, text="취소", command=self.destroy).pack(side="left")
+        self.grab_set()
+
+    def _fill(self, d):
+        for k, (u, a, b) in self.v.items():
+            u.set(True)
+            a.set(d[k][0])
+            b.set(d[k][1])
+
+    def _ok(self):
+        try:
+            out = {"use": {}}
+            for k, (u, a, b) in self.v.items():
+                lo, hi = sorted((float(a.get()), float(b.get())))
+                out[k] = [int(lo), int(hi)] if k != "aspect" else [round(lo, 1), round(hi, 1)]
+                out["use"][k] = bool(u.get())
+        except Exception:
+            messagebox.showwarning("랜덤 범위", "숫자를 확인해주세요.", parent=self)
+            return
+        self.app.settings[self.key] = out
+        self.destroy()
+
+
+class Preview(ttk.Frame):
+    """선택한 이미지에 지금 색감 값을 입힌 작은 미리보기 (원본 | 결과). 클릭하면 전체 화면 비교"""
+
+    def __init__(self, master, height=150):
+        super().__init__(master)
+        self.h = height
+        self.lbl = ttk.Label(self, text="이미지를 선택하면 미리보기가 나옵니다.", anchor="center",
+                             foreground=GRAY, cursor="hand2")
+        self.lbl.pack(fill="x")
+        self.tip = ttk.Label(self, text="", foreground=GRAY)
+        self.tip.pack(anchor="w")
+        self.lbl.bind("<Button-1>", lambda e: self.open_full())
+        self._img = None
+        self._src = None
+        self._src_path = None
+        self._params = lambda: {}
+        self._list = []
+
+    def show(self, path, params, files=None):
+        """params: 값(dict) 또는 지금 값을 돌려주는 함수. files: 전체 화면에서 넘겨 볼 목록"""
+        self._params = params if callable(params) else (lambda p=params: p or {})
+        self._list = list(files or ([path] if path else []))
+        try:
+            from PIL import Image, ImageTk
+            if not path:
+                self._img = None
+                self._src_path = None
+                self.lbl.config(image="", text="이미지를 선택하면 미리보기가 나옵니다.")
+                self.tip.config(text="")
+                return
+            if path != self._src_path:
+                im = core._load_rgb(path)
+                im.thumbnail((self.h * 2, self.h))
+                self._src, self._src_path = im, path
+            a = self._src
+            b = core.apply_adjust(a.copy(), self._params())
+            canvas = Image.new("RGB", (a.width * 2 + 6, a.height), (240, 240, 240))
+            canvas.paste(a, (0, 0))
+            canvas.paste(b, (a.width + 6, 0))
+            self._img = ImageTk.PhotoImage(canvas)
+            self.lbl.config(image=self._img, text="")
+            self.tip.config(text="왼쪽 원본 · 오른쪽 결과  (클릭하면 크게 비교)")
+        except Exception as e:
+            self.lbl.config(image="", text=f"미리보기 불가: {e}")
+
+    def open_full(self):
+        if not self._src_path:
+            return
+        files = self._list or [self._src_path]
+        start = files.index(self._src_path) if self._src_path in files else 0
+        CompareWindow(self, files, start, self._params)
+
+
+class CompareWindow(tk.Toplevel):
+    """전체 화면에 원본과 조절 결과를 나란히. 휠·←→ 로 다음/이전 장, ESC·클릭으로 닫기"""
+    BG = "#1e1f22"
+
+    def __init__(self, master, files, index, params_fn):
+        super().__init__(master)
+        self.files, self.i, self.params_fn = files, index, params_fn
+        self._cache = {}
+        self._photo = None
+        self.configure(bg=self.BG)
+        self.attributes("-fullscreen", True)
+        self.attributes("-topmost", True)
+        self.c = tk.Canvas(self, bg=self.BG, highlightthickness=0)
+        self.c.pack(fill="both", expand=True)
+        for seq in ("<Escape>", "<Button-3>"):
+            self.bind(seq, lambda e: self.destroy())
+        self.c.bind("<Double-Button-1>", lambda e: self.destroy())
+        self.bind("<MouseWheel>", lambda e: self.step(-1 if e.delta > 0 else 1))
+        self.bind("<Button-4>", lambda e: self.step(-1))
+        self.bind("<Button-5>", lambda e: self.step(1))
+        for k, d in (("<Right>", 1), ("<Down>", 1), ("<Next>", 1), ("<space>", 1),
+                     ("<Left>", -1), ("<Up>", -1), ("<Prior>", -1)):
+            self.bind(k, lambda e, d=d: self.step(d))
+        self.focus_force()
+        self.after(50, self.render)
+
+    def step(self, d):
+        n = len(self.files)
+        if n > 1:
+            self.i = (self.i + d) % n
+            self.render()
+
+    def _load(self, path, box):
+        key = (path, box)
+        if key not in self._cache:
+            im = core._load_rgb(path)
+            im.thumbnail(box)
+            if len(self._cache) > 6:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[key] = im
+        return self._cache[key]
+
+    def render(self):
+        from PIL import Image, ImageTk
+        W, H = self.winfo_width(), self.winfo_height()
+        if W < 100:
+            W, H = self.winfo_screenwidth(), self.winfo_screenheight()
+        gap, top, bottom = 16, 44, 34
+        box = ((W - gap * 3) // 2, H - top - bottom)
+        path = self.files[self.i]
+        self.c.delete("all")
+        try:
+            a = self._load(path, box)
+            b = core.apply_adjust(a.copy(), self.params_fn() or {})
+            sheet = Image.new("RGB", (a.width * 2 + gap, a.height), self.BG)
+            sheet.paste(a, (0, 0))
+            sheet.paste(b, (a.width + gap, 0))
+            self._photo = ImageTk.PhotoImage(sheet)
+            cx, cy = W // 2, top + (H - top - bottom) // 2
+            self.c.create_image(cx, cy, image=self._photo)
+            lx = cx - (a.width + gap) // 2
+            rx = cx + (a.width + gap) // 2
+            ly = cy - a.height // 2 - 14
+            self.c.create_text(lx, ly, text="원본", fill="#cfd3da", font=FONT_B)
+            self.c.create_text(rx, ly, text="조절 결과", fill="#cfd3da", font=FONT_B)
+        except Exception as e:
+            self.c.create_text(W // 2, H // 2, text=f"열 수 없는 이미지: {e}", fill="#f88", font=FONT)
+        name = os.path.basename(path)
+        self.c.create_text(16, 14, anchor="nw", fill="#e8eaed", font=FONT_B,
+                           text=f"{self.i + 1} / {len(self.files)}   {name}")
+        self.c.create_text(W - 16, H - 12, anchor="se", fill="#8a8f98", font=FONT,
+                           text="마우스 휠 · ← → : 다음/이전 장     ESC · 오른쪽 클릭 · 더블클릭 : 닫기")
+
+
+PANES = []   # 저장할 폭 조절 영역들
+
+
+class Paned(tk.PanedWindow):
+    """얇은 회색 줄로 폭을 조절하는 분할 영역(마우스를 대면 ↔ 표시). 위치는 자동 저장"""
+
+    def __init__(self, master, app, key, orient="horizontal"):
+        super().__init__(master, orient=orient, sashwidth=5, sashrelief="flat", sashpad=0,
+                         showhandle=False, bg="#dcdfe3", bd=0,
+                         opaqueresize=False, sashcursor="sb_h_double_arrow" if orient == "horizontal" else "sb_v_double_arrow")
         self.app = app
         self.key = key
         PANES.append(self)
