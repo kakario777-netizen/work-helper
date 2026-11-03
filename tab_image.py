@@ -130,8 +130,8 @@ class ImageTab(ttk.Frame):
         ttk.Label(g4, text="원본 파일은 건드리지 않습니다.", foreground=GRAY).pack(anchor="w", pady=(4, 0))
         self._mode_changed()
 
-        self.run_btn = ttk.Button(opt, text="  실행  ", command=self._run)
-        self.run_btn.pack(fill="x", pady=(4, 6))
+        self.run_btn = ttk.Button(opt, text="실행", style="Big.TButton", command=self._run)
+        self.run_btn.pack(fill="x", pady=(4, 8), ipady=4)
         self.prog = ttk.Progressbar(opt, mode="determinate")
         self.prog.pack(fill="x")
         self.result_lbl = ttk.Label(opt, text="", wraplength=280, justify="left")

@@ -521,11 +521,12 @@ def pick_random(src_files, count, rng):
     return picks
 
 
-def make_count_set(src_files, out_dir, count, rng, progress=None, **kw):
-    """보관된 이미지에서 무작위로 골라 count장 만들어 1.jpg~"""
+def make_count_set(src_files, out_dir, count, rng, progress=None, kw_fn=None, **kw):
+    """보관된 이미지에서 무작위로 골라 count장 만들어 1.jpg~
+    kw_fn 이 있으면 장마다 그 함수가 주는 새 설정값을 씀"""
     os.makedirs(out_dir, exist_ok=True)
     for i, src in enumerate(pick_random(src_files, count, rng)):
-        im, _ = make_variant(src, rng, **kw)
+        im, _ = make_variant(src, rng, **(kw_fn() if kw_fn else kw))
         save_with_new_meta(im, os.path.join(out_dir, f"{i + 1}.jpg"), rng)
         if progress:
             progress()

@@ -34,6 +34,7 @@ class App:
         style.configure("Treeview", rowheight=26)
         style.configure("Treeview.Heading", font=FONT_B)
         style.configure("TNotebook.Tab", padding=(14, 6))
+        style.configure("Big.TButton", font=("맑은 고딕", 12, "bold"), padding=(10, 10))
 
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
@@ -436,7 +437,16 @@ def main():
             print("list sel:", cap.tree.selection() == tuple(cap.sel), flush=True)
             # 썸네일
             th = os.path.join(tmp, "th")
-            core.make_count_set(core.list_images(src), th, 4, rng, **app.thumb_tab._params())
+            tk_ = app.thumb_tab
+            keys = [k for k, rv in tk_.adjust.rnd.items() if rv.get()]
+            _, cfg = tk_._range_cfg()
+
+            def fresh():
+                k2 = dict(tk_._params())
+                k2["base"] = core.random_adjust(rng, keys)
+                k2.update({x: core.random_size(rng, cfg)[x] for x in ("lmin", "lmax", "tmin", "tmax", "aspect")})
+                return k2
+            core.make_count_set(core.list_images(src), th, 4, rng, kw_fn=fresh, **tk_._params())
             from PIL import Image as I
             print("thumbs:", [I.open(os.path.join(th, f)).size for f in sorted(os.listdir(th))], flush=True)
             print("dnd:", bool(TkinterDnD), "docs:", known_folder("documents"), flush=True)

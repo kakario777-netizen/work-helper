@@ -108,8 +108,6 @@ class LibraryTab(ttk.Frame):
         self._range_row(g, 1, "테두리 자르기(원본 px)", self.tmin, self.tmax, 0, 60)
         ttk.Label(g, text="가로·세로 비율 흔들림(%)").grid(row=2, column=0, sticky="w", pady=2)
         ttk.Spinbox(g, from_=0, to=15, increment=0.5, textvariable=self.aspect, width=6).grid(row=2, column=1, sticky="w", padx=4)
-        ttk.Checkbutton(g, text="장마다 미세하게 또 다르게(밝기·채도·감마 등)", variable=self.micro).grid(
-            row=3, column=0, columnspan=4, sticky="w", pady=(4, 0))
         ttk.Label(g, text="순서: 원본 테두리를 변마다 다르게 잘라냄(한 변 최대 4%)\n→ 이미지 전체를 키우거나 줄여 긴 변을 맞춤",
                   foreground=GRAY).grid(row=4, column=0, columnspan=4, sticky="w")
 
@@ -140,14 +138,21 @@ class LibraryTab(ttk.Frame):
         ttk.Label(g2, text=label, font=FONT_B).grid(row=0, column=0, sticky="w")
         self.count = tk.IntVar(value=s.get(f"{self.k}_count", 5 if self.is_img else 10))
         ttk.Spinbox(g2, from_=1, to=500, textvariable=self.count, width=6).grid(row=0, column=1, sticky="w", padx=6)
-        hint = ("폴더 하나에 원본 이미지 전부가\n한 장씩 변형되어 들어갑니다." if self.is_img
-                else "보관된 이미지에서 무작위로 골라 만듭니다.\n이미지 수 이하로 요청하면 중복 없음.")
-        ttk.Label(g2, text=hint, foreground=GRAY, justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.vary = tk.BooleanVar(value=s.get(f"{self.k}_vary", False))
+        ttk.Checkbutton(g2, text=("폴더마다 다른 랜덤값" if self.is_img else "장마다 다른 랜덤값"),
+                        variable=self.vary).grid(row=0, column=2, sticky="w", padx=(4, 0))
+        hint = ("폴더 하나에 원본 이미지 전부가 한 장씩 변형되어 들어갑니다.\n"
+                "'폴더마다 다른 랜덤값'을 켜면 폴더를 만들 때마다 '랜덤'을 새로 누른 것처럼\n"
+                "색감·크기·테두리·비율이 바뀝니다. (한 폴더 안은 같은 값)" if self.is_img
+                else "보관된 이미지에서 무작위로 골라 만듭니다. 이미지 수 이하로 요청하면 중복 없음.\n"
+                     "'장마다 다른 랜덤값'을 켜면 한 장마다 '랜덤'을 새로 누른 것처럼\n"
+                     "색감·크기·테두리·비율이 바뀝니다.")
+        ttk.Label(g2, text=hint, foreground=GRAY, justify="left", wraplength=250).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
         self.where = ttk.Label(g2, text="", foreground="#0a5", justify="left", wraplength=240)
-        self.where.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.where.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
-        self.run_btn = ttk.Button(right, text="  선택 항목 만들기  ", command=self._run)
-        self.run_btn.pack(fill="x")
+        self.run_btn = ttk.Button(right, text="선택 항목 만들기", style="Big.TButton", command=self._run)
+        self.run_btn.pack(fill="x", ipady=4)
         ttk.Label(right, text="여러 개 선택(Ctrl+클릭) 시 항목마다 따로 만듭니다.",
                   foreground=GRAY, wraplength=240).pack(anchor="w", pady=(4, 8))
         self.prog = ttk.Progressbar(right, mode="determinate")
@@ -464,7 +469,8 @@ class LibraryTab(ttk.Frame):
                 f"{self.k}_count": int(self.count.get()), f"{self.k}_min": int(self.lmin.get()),
                 f"{self.k}_max": int(self.lmax.get()), f"{self.k}_tmin": int(self.tmin.get()),
                 f"{self.k}_tmax": int(self.tmax.get()), f"{self.k}_aspect": float(self.aspect.get()),
-                f"{self.k}_micro": self.micro.get(), f"{self.k}_view": self.view.get()})
+                f"{self.k}_micro": False, f"{self.k}_vary": self.vary.get(),
+                f"{self.k}_view": self.view.get()})
         except Exception:
             pass
 
@@ -482,7 +488,7 @@ class LibraryTab(ttk.Frame):
     def _params(self):
         lo, hi = sorted((int(self.lmin.get()), int(self.lmax.get())))
         return {"lmin": lo, "lmax": hi, "tmin": int(self.tmin.get()), "tmax": int(self.tmax.get()),
-                "aspect": float(self.aspect.get()), "base": self.adjust.get(), "micro": self.micro.get()}
+                "aspect": float(self.aspect.get()), "base": self.adjust.get(), "micro": False}
 
     def _run(self):
         if self.worker and self.worker.is_alive():
@@ -502,6 +508,26 @@ class LibraryTab(ttk.Frame):
         if not jobs:
             messagebox.showinfo(APP_NAME, "선택한 항목에 이미지가 없습니다.")
             return
+        vary = self.vary.get()
+        rnd_keys = [k for k, rv in self.adjust.rnd.items() if rv.get()]
+        _, cfg = self._range_cfg()
+
+        def fresh(rng):
+            """'랜덤'을 새로 누른 것과 같은 값 (체크된 항목·범위 설정 그대로)"""
+            k2 = dict(kw)
+            base = dict(kw["base"])
+            base.update(core.random_adjust(rng, rnd_keys))
+            k2["base"] = base
+            size = core.random_size(rng, cfg)
+            use = cfg.get("use", {})
+            if use.get("len", True):
+                k2["lmin"], k2["lmax"] = size["lmin"], size["lmax"]
+            if use.get("trim", True):
+                k2["tmin"], k2["tmax"] = size["tmin"], size["tmax"]
+            if use.get("aspect", True):
+                k2["aspect"] = size["aspect"]
+            return k2
+
         desktop = known_folder("desktop")
         total = sum(len(f) * count for d, f in jobs) if self.is_img else count * len(jobs)
         self.prog.config(maximum=total, value=0)
@@ -522,11 +548,12 @@ class LibraryTab(ttk.Frame):
                         for _ in range(count):
                             top = core.next_numbered_dir(desktop, self._out_base(d))
                             out = os.path.join(top, "output")
-                            core.make_folder_set(files, out, rng, progress=tick, **kw)
+                            core.make_folder_set(files, out, rng, progress=tick, **(fresh(rng) if vary else kw))
                             outs.append(top)
                     else:
                         top = core.next_numbered_dir(desktop, self._out_base(d))
-                        core.make_count_set(files, top, count, rng, progress=tick, **kw)
+                        core.make_count_set(files, top, count, rng, progress=tick,
+                                            kw_fn=(lambda: fresh(rng)) if vary else None, **kw)
                         outs.append(top)
                 self.q.put(("done", outs, None))
             except Exception as e:
