@@ -505,6 +505,14 @@ def make_folder_set(src_files, out_dir, rng, progress=None, **kw):
             progress()
 
 
+def next_numbered_file(parent, base, ext=".jpg"):
+    """'base 1.jpg', 'base 2.jpg' … 중 아직 없는 첫 번호"""
+    n = 1
+    while os.path.exists(os.path.join(parent, f"{base} {n}{ext}")):
+        n += 1
+    return os.path.join(parent, f"{base} {n}{ext}")
+
+
 def pick_random(src_files, count, rng):
     """가진 이미지에서 무작위로 count장 고르기.
     count가 이미지 수 이하이면 중복 없이, 넘으면 모든 이미지를 고르게 한 바퀴씩 돌려 씀(연달아 같은 장 X)"""
@@ -521,12 +529,17 @@ def pick_random(src_files, count, rng):
     return picks
 
 
-def make_count_set(src_files, out_dir, count, rng, progress=None, kw_fn=None, **kw):
-    """보관된 이미지에서 무작위로 골라 count장 만들어 1.jpg~
-    kw_fn 이 있으면 장마다 그 함수가 주는 새 설정값을 씀"""
+def make_count_set(src_files, out_dir, count, rng, progress=None, kw_fn=None, base_name=None, **kw):
+    """보관된 이미지에서 무작위로 골라 count장 만들기.
+    base_name 이 있으면 out_dir 에 '이름 1.jpg', '이름 2.jpg' … (이미 있는 번호는 건너뜀), 없으면 1.jpg~
+    kw_fn 이 있으면 장마다 그 함수가 주는 새 설정값을 씀. 반환: 저장한 파일 경로들"""
     os.makedirs(out_dir, exist_ok=True)
+    saved = []
     for i, src in enumerate(pick_random(src_files, count, rng)):
         im, _ = make_variant(src, rng, **(kw_fn() if kw_fn else kw))
-        save_with_new_meta(im, os.path.join(out_dir, f"{i + 1}.jpg"), rng)
+        path = next_numbered_file(out_dir, base_name) if base_name else os.path.join(out_dir, f"{i + 1}.jpg")
+        save_with_new_meta(im, path, rng)
+        saved.append(path)
         if progress:
             progress()
+    return saved

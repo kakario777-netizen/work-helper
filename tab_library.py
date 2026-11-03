@@ -412,8 +412,13 @@ class LibraryTab(ttk.Frame):
     def _where_text(self):
         if not self.sel:
             return "항목을 선택하면 저장 위치가 여기 표시됩니다."
-        ex = os.path.basename(core.next_numbered_dir(known_folder("desktop"), self._out_base(self.sel[0])))
-        tail = "\\output\\" if self.is_img else "\\"
+        desk = known_folder("desktop")
+        if self.is_img:
+            ex = os.path.basename(core.next_numbered_dir(desk, self._out_base(self.sel[0])))
+            tail = "\\output\\"
+        else:
+            ex = os.path.basename(core.next_numbered_file(desk, self._out_base(self.sel[0])))
+            tail = ""
         more = f"\n외 {len(self.sel) - 1}개 항목" if len(self.sel) > 1 else ""
         return f"바탕화면\\{ex}{tail} 부터{more}"
 
@@ -551,10 +556,10 @@ class LibraryTab(ttk.Frame):
                             core.make_folder_set(files, out, rng, progress=tick, **(fresh(rng) if vary else kw))
                             outs.append(top)
                     else:
-                        top = core.next_numbered_dir(desktop, self._out_base(d))
-                        core.make_count_set(files, top, count, rng, progress=tick,
-                                            kw_fn=(lambda: fresh(rng)) if vary else None, **kw)
-                        outs.append(top)
+                        # 썸네일은 폴더 없이 바탕화면에 '병원명 썸넬 1.jpg' 처럼 바로 저장
+                        outs += core.make_count_set(files, desktop, count, rng, progress=tick,
+                                                    kw_fn=(lambda: fresh(rng)) if vary else None,
+                                                    base_name=self._out_base(d), **kw)
                 self.q.put(("done", outs, None))
             except Exception as e:
                 self.q.put(("done", outs, str(e)))
@@ -574,10 +579,11 @@ class LibraryTab(ttk.Frame):
                     self.run_btn.config(state="normal")
                     names = [os.path.basename(o) for o in outs]
                     shown = "\n".join(names[:8]) + (f"\n… 외 {len(names) - 8}개" if len(names) > 8 else "")
-                    self.result.config(text=(f"완료: 바탕화면에 폴더 {len(outs)}개\n{shown}" if outs else "") +
+                    what = f"폴더 {len(outs)}개" if self.is_img else f"이미지 {len(outs)}장"
+                    self.result.config(text=(f"완료: 바탕화면에 {what}\n{shown}" if outs else "") +
                                        (f"\n오류: {err}" if err else ""))
                     if outs:
-                        self.last_out = outs[-1] if len(outs) == 1 else known_folder("desktop")
+                        self.last_out = outs[-1] if (len(outs) == 1 and self.is_img) else known_folder("desktop")
                         self.open_btn.config(state="normal")
                     self.where.config(text=self._where_text())
                     if err:
