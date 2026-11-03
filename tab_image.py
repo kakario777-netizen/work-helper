@@ -61,6 +61,9 @@ class ImageTab(ttk.Frame):
         ttk.Button(mh, text="  랜덤  ", command=self._randomize).pack(side="left")
         ttk.Button(mh, text="랜덤 범위…", command=self._range_dialog).pack(side="left", padx=4)
         ttk.Button(mh, text="모두 0", command=lambda: self.adjust.reset()).pack(side="right")
+        self.per_folder = tk.BooleanVar(value=s.get("im_per_folder", False))
+        ttk.Checkbutton(mid, text="폴더별 각각 랜덤 (폴더마다 새 랜덤값, 한 폴더 안은 같은 값)",
+                        variable=self.per_folder).pack(anchor="w", pady=(6, 0))
         msf = ScrollFrame(mid)
         msf.pack(fill="both", expand=True, pady=(6, 0))
         m = ttk.Frame(msf.inner, padding=(0, 0, 8, 0))
@@ -258,7 +261,7 @@ class ImageTab(ttk.Frame):
     def remember(self):
         s = self.app.settings
         try:
-            s.update(im_del_src=self.del_src.get(), quality=int(self.quality.get()), fmt=self.fmt.get(), rn_on=self.rn_on.get(),
+            s.update(im_per_folder=self.per_folder.get(), im_del_src=self.del_src.get(), quality=int(self.quality.get()), fmt=self.fmt.get(), rn_on=self.rn_on.get(),
                      pattern=self.pattern.get(), digits=int(self.digits.get()), img_out=self.out_dir.get(),
                      img_out_mode=self.out_mode.get(), im_adj_on=self.adj_on.get())
         except Exception:
@@ -283,6 +286,29 @@ class ImageTab(ttk.Frame):
             messagebox.showinfo(APP_NAME, "저장할 폴더를 지정해주세요.")
             return
         del_src = self.del_src.get()
+        per_folder = self.per_folder.get()
+        rnd_keys = [k for k, rv in self.adjust.rnd.items() if rv.get()]
+        _, rcfg = self._range_cfg()
+        base_adj = self.adjust.get()
+        folder_opts = {}
+
+        def opts_for(folder, rng):
+            """폴더마다 '랜덤'을 새로 누른 것처럼 한 번 정하고, 그 폴더 안에서는 계속 같은 값"""
+            if folder not in folder_opts:
+                o = dict(opts)
+                adj = dict(base_adj)
+                adj.update(core.random_adjust(rng, rnd_keys))
+                o["adjust"] = adj
+                crop = dict(opts.get("crop") or {})
+                if crop.get("on"):
+                    size = core.random_size(rng, rcfg)
+                    use = rcfg.get("use", {})
+                    for key, u in (("width", "len"), ("trim", "trim"), ("aspect", "aspect")):
+                        if use.get(u, True):
+                            crop[key] = size[key]
+                    o["crop"] = crop
+                folder_opts[folder] = o
+            return folder_opts[folder]
         if del_src and not messagebox.askyesno(
                 APP_NAME, f"가공해서 저장이 끝난 원본 {len(self.files)}개를 휴지통으로 보냅니다.\n"
                           "(저장에 실패한 파일은 지우지 않습니다. 휴지통에서 되살릴 수 있어요)\n\n계속할까요?"):
@@ -294,6 +320,8 @@ class ImageTab(ttk.Frame):
         self.result_lbl.config(text="처리 중...")
 
         def work():
+            import random as _random
+            rng = _random.Random()
             before = after = ok = 0
             errors = []
             last_dir = None
@@ -302,7 +330,8 @@ class ImageTab(ttk.Frame):
                 d = out if custom else os.path.join(os.path.dirname(src), "output")
                 try:
                     os.makedirs(d, exist_ok=True)
-                    dst, b, a = core.process_image(src, d, start + i, opts)
+                    o = opts_for(os.path.dirname(src), rng) if per_folder else opts
+                    dst, b, a = core.process_image(src, d, start + i, o)
                     before += b
                     after += a
                     ok += 1
@@ -316,7 +345,7 @@ class ImageTab(ttk.Frame):
             if del_src and done_src:
                 core.recycle(done_src)
                 removed = [p for p in done_src if not os.path.exists(p)]
-            self.q.put(("done", ok, before, after, errors, last_dir, removed))
+            self.q.put(("done", ok, before, after, errors, last_dir, removed, len(folder_opts)))
 
         self.worker = threading.Thread(target=work, daemon=True)
         self.worker.start()
@@ -329,7 +358,7 @@ class ImageTab(ttk.Frame):
                 if msg[0] == "prog":
                     self.prog["value"] = msg[1]
                 elif msg[0] == "done":
-                    _, ok, b, a, errors, last_dir, removed = msg
+                    _, ok, b, a, errors, last_dir, removed, nfold = msg
                     self.run_btn.config(state="normal")
                     for p in removed:   # 지운 원본은 목록에서도 뺌
                         if self.tree.exists(p):
@@ -341,7 +370,8 @@ class ImageTab(ttk.Frame):
                     self.result_lbl.config(
                         text=f"완료 {ok}개 · {core.human_size(b)} → {core.human_size(a)}{pct}"
                              + (f" · 실패 {len(errors)}개" if errors else "")
-                             + (f" · 원본 {len(removed)}개 휴지통으로" if removed else ""))
+                             + (f" · 원본 {len(removed)}개 휴지통으로" if removed else "")
+                             + (f" · 폴더 {nfold}개 각각 랜덤" if nfold else ""))
                     if errors:
                         messagebox.showwarning(APP_NAME, "일부 파일을 처리하지 못했습니다.\n\n" + "\n".join(errors[:15]))
                     if last_dir and messagebox.askyesno(APP_NAME, "완료했습니다. 결과 폴더를 열까요?"):
