@@ -437,20 +437,20 @@ def _load_rgb(src_path):
 
 
 def make_variant(src_path, rng, lmin=800, lmax=900, tmin=2, tmax=8, aspect=3.0, base=None, micro=True):
-    """테두리를 몇 픽셀씩(변마다 다르게) 잘라내고, 긴 변을 lmin~lmax로 맞추되
+    """원본 테두리를 몇 픽셀씩(변마다 다르게) 먼저 잘라낸 뒤, 이미지 전체를 확대·축소해 긴 변을 lmin~lmax로 맞추되
     가로·세로 비율을 ±aspect% 안에서 살짝 어긋나게, 색감은 base + 미세 흔들림.
     반환: (이미지, 설명)"""
     from PIL import Image
     im = _load_rgb(src_path)
     W, H = im.size
     L = rng.randint(min(lmin, lmax), max(lmin, lmax))
-    scale = L / max(W, H)
     lo, hi = sorted((max(0, int(tmin)), max(0, int(tmax))))
-    # 출력 기준 픽셀을 원본 기준으로 환산, 한 변당 최대 4%까지만
-    cut = [min(rng.randint(lo, hi) / scale, (W if i % 2 == 0 else H) * 0.04) for i in range(4)]
+    # 1) 원본에서 테두리를 변마다 다른 픽셀만큼 먼저 잘라냄 (한 변당 최대 4%까지만)
+    cut = [min(rng.randint(lo, hi), (W if i % 2 == 0 else H) * 0.04) for i in range(4)]
     box = (int(cut[0]), int(cut[1]), int(W - cut[2]), int(H - cut[3]))
     if box[2] - box[0] > 10 and box[3] - box[1] > 10:
         im = im.crop(box)
+    # 2) 자른 이미지를 통째로 확대·축소해서 긴 변을 L 픽셀로 (자르지 않음)
     cw, ch = im.size
     j = 1 + rng.uniform(-aspect, aspect) / 100
     if cw >= ch:
