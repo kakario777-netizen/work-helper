@@ -11,7 +11,7 @@ from tkinter import ttk, filedialog, messagebox
 
 import core
 from common import (APP_NAME, GRAY, FONT, FONT_B, known_folder, enable_drop, drop_hint, open_folder,
-                    ScrollFrame, AdjustPanel, Preview, Paned, RandomRangeDialog)
+                    ScrollFrame, AdjustPanel, Preview, Paned, RandomRangeDialog, SizeCropPanel, WrapLabel)
 
 META = "_정보.json"
 TILE_MIN = 130
@@ -83,37 +83,27 @@ class LibraryTab(ttk.Frame):
         ttk.Button(lb, text="삭제", command=self._delete).pack(side="left")
         ttk.Button(lb, text="보관 폴더", command=lambda: open_folder(self.lib)).pack(side="right")
 
-        # ══ 가운데: 랜덤 · 크기 · 색감 ══
-        mid = ttk.Frame(body, padding=(10, 0))
-        body.add(mid, weight=0, width=340, minsize=260)
+        # ══ 가운데: 랜덤 · 크기 · 색감 (길어지면 통째로 스크롤) ══
+        mid = ttk.Frame(body, padding=(10, 0, 0, 0))
+        body.add(mid, weight=0, width=350, minsize=270)
         mh = ttk.Frame(mid)
-        mh.pack(fill="x")
+        mh.pack(fill="x", padx=(0, 10))
         ttk.Button(mh, text="  랜덤  ", command=self._randomize).pack(side="left")
         ttk.Button(mh, text="랜덤 범위…", command=self._range_dialog).pack(side="left", padx=4)
         ttk.Button(mh, text="모두 0", command=self._reset).pack(side="right")
+        msf = ScrollFrame(mid)
+        msf.pack(fill="both", expand=True, pady=(6, 0))
+        m = ttk.Frame(msf.inner, padding=(0, 0, 8, 0))
+        m.pack(fill="both", expand=True)
 
-        self.preview = Preview(mid, height=120)
-        self.preview.pack(fill="x", pady=6)
+        self.preview = Preview(m, height=120)
+        self.preview.pack(fill="x", pady=(0, 6))
+        self.sizer = SizeCropPanel(m, app, self.k, width=850, on_change=self._update_preview_later)
+        self.sizer.pack(fill="x")
 
-        g = ttk.LabelFrame(mid, text=" 크기 · 자르기 ", padding=6)
-        g.pack(fill="x")
-        dmin, dmax = (800, 900) if self.is_img else (750, 950)
-        self.lmin = tk.IntVar(value=s.get(f"{self.k}_min", dmin))
-        self.lmax = tk.IntVar(value=s.get(f"{self.k}_max", dmax))
-        self.tmin = tk.IntVar(value=s.get(f"{self.k}_tmin", 2))
-        self.tmax = tk.IntVar(value=s.get(f"{self.k}_tmax", 8))
-        self.aspect = tk.DoubleVar(value=s.get(f"{self.k}_aspect", 3.0))
-        self.micro = tk.BooleanVar(value=s.get(f"{self.k}_micro", False))
-        self._range_row(g, 0, "긴 변 크기(확대·축소)", self.lmin, self.lmax, 100, 5000)
-        self._range_row(g, 1, "테두리 자르기(원본 px)", self.tmin, self.tmax, 0, 60)
-        ttk.Label(g, text="가로·세로 비율 흔들림(%)").grid(row=2, column=0, sticky="w", pady=2)
-        ttk.Spinbox(g, from_=0, to=15, increment=0.5, textvariable=self.aspect, width=6).grid(row=2, column=1, sticky="w", padx=4)
-        ttk.Label(g, text="순서: 원본 테두리를 변마다 다르게 잘라냄(한 변 최대 4%)\n→ 이미지 전체를 키우거나 줄여 긴 변을 맞춤",
-                  foreground=GRAY).grid(row=4, column=0, columnspan=4, sticky="w")
-
-        ttk.Label(mid, text="색감 기본값", font=FONT_B).pack(anchor="w", pady=(8, 2))
-        self.adjust = AdjustPanel(mid, app, f"{self.k}_adjust", on_change=self._update_preview)
-        self.adjust.pack(fill="both", expand=True)
+        ttk.Label(m, text="색감 기본값", font=FONT_B).pack(anchor="w", pady=(10, 2))
+        self.adjust = AdjustPanel(m, app, f"{self.k}_adjust", on_change=self._update_preview, scroll=False)
+        self.adjust.pack(fill="x")
 
         # ══ 오른쪽: 이름 · 만들기 ══
         right = ttk.Frame(body, padding=(10, 0))
@@ -140,37 +130,32 @@ class LibraryTab(ttk.Frame):
         ttk.Spinbox(g2, from_=1, to=500, textvariable=self.count, width=6).grid(row=0, column=1, sticky="w", padx=6)
         self.vary = tk.BooleanVar(value=s.get(f"{self.k}_vary", False))
         ttk.Checkbutton(g2, text=("폴더마다 다른 랜덤값" if self.is_img else "장마다 다른 랜덤값"),
-                        variable=self.vary).grid(row=0, column=2, sticky="w", padx=(4, 0))
-        hint = ("폴더 하나에 원본 이미지 전부가 한 장씩 변형되어 들어갑니다.\n"
-                "'폴더마다 다른 랜덤값'을 켜면 폴더를 만들 때마다 '랜덤'을 새로 누른 것처럼\n"
-                "색감·크기·테두리·비율이 바뀝니다. (한 폴더 안은 같은 값)" if self.is_img
-                else "보관된 이미지에서 무작위로 골라 만듭니다. 이미지 수 이하로 요청하면 중복 없음.\n"
-                     "'장마다 다른 랜덤값'을 켜면 한 장마다 '랜덤'을 새로 누른 것처럼\n"
-                     "색감·크기·테두리·비율이 바뀝니다.")
-        ttk.Label(g2, text=hint, foreground=GRAY, justify="left", wraplength=250).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        self.where = ttk.Label(g2, text="", foreground="#0a5", justify="left", wraplength=240)
-        self.where.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+                        variable=self.vary).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        hint = ("폴더 하나에 원본 이미지 전부가 한 장씩 같은 조건으로 변형되어 들어갑니다. "
+                "'폴더마다 다른 랜덤값'을 켜면 폴더를 만들 때마다 '랜덤'을 새로 누른 것처럼 "
+                "가로 크기·테두리·비율·색감이 바뀝니다. (한 폴더 안은 모두 같은 값)" if self.is_img
+                else "보관된 이미지에서 무작위로 골라 만듭니다. 이미지 수 이하로 요청하면 중복 없음. "
+                     "'장마다 다른 랜덤값'을 켜면 한 장마다 '랜덤'을 새로 누른 것처럼 "
+                     "가로 크기·테두리·비율·색감이 바뀝니다. (끄면 전부 같은 조건)")
+        WrapLabel(g2, text=hint, foreground=GRAY).grid(row=2, column=0, columnspan=2, sticky="we", pady=(6, 0))
+        self.where = WrapLabel(g2, text="", foreground="#0a5")
+        self.where.grid(row=3, column=0, columnspan=2, sticky="we", pady=(8, 0))
+        g2.columnconfigure(1, weight=1)
 
         self.run_btn = ttk.Button(right, text="선택 항목 만들기", style="Big.TButton", command=self._run)
         self.run_btn.pack(fill="x", ipady=4)
-        ttk.Label(right, text="여러 개 선택(Ctrl+클릭) 시 항목마다 따로 만듭니다.",
-                  foreground=GRAY, wraplength=240).pack(anchor="w", pady=(4, 8))
+        WrapLabel(right, text="여러 개 선택(Ctrl+클릭) 시 항목마다 따로 만듭니다.",
+                  foreground=GRAY).pack(fill="x", pady=(4, 8))
         self.prog = ttk.Progressbar(right, mode="determinate")
         self.prog.pack(fill="x")
-        self.result = ttk.Label(right, text="", justify="left", wraplength=240)
-        self.result.pack(anchor="w", pady=6)
+        self.result = WrapLabel(right, text="")
+        self.result.pack(fill="x", pady=6)
         self.open_btn = ttk.Button(right, text="결과 폴더 열기", state="disabled",
                                    command=lambda: self.last_out and open_folder(self.last_out))
         self.open_btn.pack(anchor="w")
 
         self._switch_view()
         self.reload()
-
-    def _range_row(self, g, r, name, v1, v2, lo, hi):
-        ttk.Label(g, text=name).grid(row=r, column=0, sticky="w", pady=2)
-        ttk.Spinbox(g, from_=lo, to=hi, textvariable=v1, width=6).grid(row=r, column=1, sticky="w", padx=4)
-        ttk.Label(g, text="~").grid(row=r, column=2)
-        ttk.Spinbox(g, from_=lo, to=hi, textvariable=v2, width=6).grid(row=r, column=3, sticky="w", padx=4)
 
     # ══ 보관 데이터 ══
     def _read_meta(self, d):
@@ -456,44 +441,34 @@ class LibraryTab(ttk.Frame):
         rng = random.Random()
         self.adjust.randomize(rng)
         _, cfg = self._range_cfg()
-        use = cfg.get("use", {})
-        size = core.random_size(rng, cfg)
-        if use.get("len", True):
-            self.lmin.set(size["lmin"])
-            self.lmax.set(size["lmax"])
-        if use.get("trim", True):
-            self.tmin.set(size["tmin"])
-            self.tmax.set(size["tmax"])
-        if use.get("aspect", True):
-            self.aspect.set(size["aspect"])
+        self.sizer.apply_random(rng, cfg)
         self.remember()
 
     def remember(self):
         try:
-            self.app.settings.update({
-                f"{self.k}_count": int(self.count.get()), f"{self.k}_min": int(self.lmin.get()),
-                f"{self.k}_max": int(self.lmax.get()), f"{self.k}_tmin": int(self.tmin.get()),
-                f"{self.k}_tmax": int(self.tmax.get()), f"{self.k}_aspect": float(self.aspect.get()),
-                f"{self.k}_micro": False, f"{self.k}_vary": self.vary.get(),
-                f"{self.k}_view": self.view.get()})
+            self.app.settings.update({f"{self.k}_count": int(self.count.get()), f"{self.k}_vary": self.vary.get(),
+                                      f"{self.k}_view": self.view.get()})
         except Exception:
             pass
 
     def _reset(self):
         self.adjust.reset()
 
-    def _update_preview(self):
-        src = None
-        if self.sel:
-            imgs = core.list_images(self.sel[0])
-            src = imgs[0] if imgs else None
-        self.preview.show(src, self.adjust.get, imgs if self.sel else [])
+    def _update_preview_later(self):
+        if getattr(self, "_pv_job", None):
+            self.after_cancel(self._pv_job)
+        self._pv_job = self.after(300, self._update_preview)
 
-    # ══ 만들기 ══
+    def _update_preview(self):
+        self._pv_job = None
+        imgs = core.list_images(self.sel[0]) if self.sel else []
+        kw = self._params()
+        self.preview.show(imgs[0] if imgs else None, lambda im, sc: core.preview_process(im, sc, **kw), imgs)
+
     def _params(self):
-        lo, hi = sorted((int(self.lmin.get()), int(self.lmax.get())))
-        return {"lmin": lo, "lmax": hi, "tmin": int(self.tmin.get()), "tmax": int(self.tmax.get()),
-                "aspect": float(self.aspect.get()), "base": self.adjust.get(), "micro": False}
+        """지금 화면의 조건 (한 폴더/한 묶음에 그대로 적용)"""
+        g = self.sizer.get()
+        return {"width": g["width"], "trim": g["trim"], "aspect": g["aspect"], "base": self.adjust.get()}
 
     def _run(self):
         if self.worker and self.worker.is_alive():
@@ -518,19 +493,16 @@ class LibraryTab(ttk.Frame):
         _, cfg = self._range_cfg()
 
         def fresh(rng):
-            """'랜덤'을 새로 누른 것과 같은 값 (체크된 항목·범위 설정 그대로)"""
+            """'랜덤'을 새로 누른 것과 같은 값 (체크된 항목·범위 설정 그대로) — 한 묶음에 쓸 고정값"""
             k2 = dict(kw)
             base = dict(kw["base"])
             base.update(core.random_adjust(rng, rnd_keys))
             k2["base"] = base
             size = core.random_size(rng, cfg)
             use = cfg.get("use", {})
-            if use.get("len", True):
-                k2["lmin"], k2["lmax"] = size["lmin"], size["lmax"]
-            if use.get("trim", True):
-                k2["tmin"], k2["tmax"] = size["tmin"], size["tmax"]
-            if use.get("aspect", True):
-                k2["aspect"] = size["aspect"]
+            for key, u in (("width", "len"), ("trim", "trim"), ("aspect", "aspect")):
+                if use.get(u, True):
+                    k2[key] = size[key]
             return k2
 
         desktop = known_folder("desktop")

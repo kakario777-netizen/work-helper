@@ -8,7 +8,7 @@ from tkinter import ttk, messagebox
 import core
 import json
 import updater
-from common import (APP_NAME, FONT, FONT_B, GRAY, TkinterDnD, PANES, known_folder, load_settings, save_settings)
+from common import (APP_NAME, FONT, FONT_B, GRAY, TkinterDnD, PANES, install_wheel, known_folder, load_settings, save_settings)
 from version import VERSION
 from tab_text import TextTab
 from tab_image import ImageTab
@@ -40,6 +40,7 @@ class App:
         style.configure("TNotebook.Tab", padding=(14, 6))
         style.configure("Big.TButton", font=("맑은 고딕", 12, "bold"), padding=(10, 10))
 
+        install_wheel(root)
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self.text_tab = TextTab(self.nb, self)
@@ -405,7 +406,8 @@ def main():
             app.image_tab.adjust.set({"brightness": 3, "hue": 2, "vignette": 10})
             app.image_tab._preview()
             from common import CompareWindow
-            cw = CompareWindow(app.root, app.image_tab.files, 0, app.image_tab.adjust.get)
+            kwp = app.image_tab._proc_kw()
+            cw = CompareWindow(app.root, app.image_tab.files, 0, lambda im, sc: core.preview_process(im, sc, **kwp))
             cw.update()
             cw.render()
             cw.step(1)
@@ -426,7 +428,7 @@ def main():
             print("grid tiles:", len(cap.tiles), "cols@760px:", cap._cols, "sel:", [os.path.basename(x) for x in cap.sel], flush=True)
             cap._randomize()
             kw = cap._params()
-            print("random:", kw["lmin"], kw["lmax"], kw["tmin"], kw["tmax"], kw["aspect"], "micro", kw["micro"], flush=True)
+            print("random:", kw["width"], kw["trim"], kw["aspect"], flush=True)
             app.collect()
             print("saved keys:", sorted(k for k in app.settings if k.startswith(("img_", "panes", "im_")))[:12], flush=True)
             print("update check:", updater.latest_release().get("tag"), "ver", VERSION, flush=True)
@@ -436,6 +438,9 @@ def main():
                 core.make_folder_set(core.list_images(cap.sel[0]), os.path.join(top, "output"), rng, **kw)
             dirs = sorted(x for x in os.listdir(tmp) if x.startswith("나음피부과 수술흉터제거 "))
             print("capture:", dirs, [len(os.listdir(os.path.join(tmp, x, "output"))) for x in dirs], flush=True)
+            from PIL import Image as _I
+            o1 = os.path.join(tmp, dirs[0], "output")
+            print("same width in folder:", sorted({_I.open(os.path.join(o1, f)).size[0] for f in os.listdir(o1)}), flush=True)
             cap.view.set("list")
             cap._switch_view()
             print("list sel:", cap.tree.selection() == tuple(cap.sel), flush=True)
@@ -448,7 +453,7 @@ def main():
             def fresh():
                 k2 = dict(tk_._params())
                 k2["base"] = core.random_adjust(rng, keys)
-                k2.update({x: core.random_size(rng, cfg)[x] for x in ("lmin", "lmax", "tmin", "tmax", "aspect")})
+                k2.update(core.random_size(rng, cfg))
                 return k2
             core.make_count_set(core.list_images(src), th, 4, rng, kw_fn=fresh, **tk_._params())
             from PIL import Image as I

@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 import core
-from common import (APP_NAME, GRAY, FONT_B, enable_drop, drop_hint, open_folder, AdjustPanel, Preview, Paned)
+from common import (APP_NAME, GRAY, FONT_B, enable_drop, drop_hint, open_folder, AdjustPanel, Preview, Paned, ScrollFrame, SizeCropPanel, RandomRangeDialog, WrapLabel)
 
 
 class ImageTab(ttk.Frame):
@@ -53,45 +53,45 @@ class ImageTab(ttk.Frame):
         enable_drop(self.tree, self._drop)
         enable_drop(left, self._drop)
 
-        # ── 가운데: 색감 조절 ──
-        mid = ttk.Frame(body, padding=(10, 0))
-        body.add(mid, weight=0, width=330, minsize=240)
+        # ── 가운데: 미리보기 · 색감 (길어지면 통째로 스크롤) ──
+        mid = ttk.Frame(body, padding=(10, 0, 0, 0))
+        body.add(mid, weight=0, width=340, minsize=260)
         mh = ttk.Frame(mid)
-        mh.pack(fill="x")
-        ttk.Label(mh, text="색감 조절", font=FONT_B).pack(side="left")
-        self.adj_on = tk.BooleanVar(value=s.get("im_adj_on", False))
-        ttk.Checkbutton(mh, text="적용", variable=self.adj_on).pack(side="left", padx=8)
+        mh.pack(fill="x", padx=(0, 10))
+        ttk.Button(mh, text="  랜덤  ", command=self._randomize).pack(side="left")
+        ttk.Button(mh, text="랜덤 범위…", command=self._range_dialog).pack(side="left", padx=4)
         ttk.Button(mh, text="모두 0", command=lambda: self.adjust.reset()).pack(side="right")
-        ttk.Button(mh, text="랜덤", command=lambda: (self.adjust.randomize(random.Random()), self.adj_on.set(True))).pack(side="right", padx=3)
-        self.preview = Preview(mid, height=140)
-        self.preview.pack(fill="x", pady=6)
-        ttk.Label(mid, text="왼쪽: 원본  ·  오른쪽: 조절 결과", foreground=GRAY).pack(anchor="w")
-        self.adjust = AdjustPanel(mid, app, "im_adjust", on_change=self._preview)
-        self.adjust.pack(fill="both", expand=True, pady=(4, 0))
+        msf = ScrollFrame(mid)
+        msf.pack(fill="both", expand=True, pady=(6, 0))
+        m = ttk.Frame(msf.inner, padding=(0, 0, 8, 0))
+        m.pack(fill="both", expand=True)
+        self.preview = Preview(m, height=130)
+        self.preview.pack(fill="x", pady=(0, 6))
+        ch = ttk.Frame(m)
+        ch.pack(fill="x", pady=(4, 2))
+        ttk.Label(ch, text="색감 조절", font=FONT_B).pack(side="left")
+        self.adj_on = tk.BooleanVar(value=s.get("im_adj_on", False))
+        ttk.Checkbutton(ch, text="적용", variable=self.adj_on, command=self._preview).pack(side="left", padx=8)
+        self.adjust = AdjustPanel(m, app, "im_adjust", on_change=self._preview, scroll=False)
+        self.adjust.pack(fill="x")
 
-        # ── 오른쪽: 파일 설정 ──
-        opt = ttk.Frame(body, padding=(10, 0))
-        body.add(opt, weight=1, minsize=260)
+        # ── 오른쪽: 파일 설정 (길어지면 스크롤) ──
+        osf = ScrollFrame(body)
+        body.add(osf, weight=1, minsize=280)
+        opt = ttk.Frame(osf.inner, padding=(10, 0, 8, 0))
+        opt.pack(fill="both", expand=True)
 
-        g1 = ttk.LabelFrame(opt, text=" 크기 조절·압축 ", padding=8)
-        g1.pack(fill="x")
-        self.rs_on = tk.BooleanVar(value=s.get("rs_on", True))
-        ttk.Checkbutton(g1, text="크기 조절", variable=self.rs_on).grid(row=0, column=0, sticky="w")
-        self.rs_mode = tk.StringVar(value=s.get("rs_mode", "가로 최대(px)"))
-        ttk.Combobox(g1, textvariable=self.rs_mode, state="readonly", width=12,
-                     values=["가로 최대(px)", "긴 변 최대(px)", "비율(%)"]).grid(row=0, column=1, padx=4)
-        self.rs_val = tk.IntVar(value=s.get("rs_val", 1000))
-        ttk.Spinbox(g1, from_=1, to=10000, textvariable=self.rs_val, width=6).grid(row=0, column=2)
-        ttk.Label(g1, text="품질(JPG·WEBP)").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self.quality = tk.IntVar(value=s.get("quality", 85))
-        ttk.Spinbox(g1, from_=10, to=100, textvariable=self.quality, width=5).grid(row=1, column=1, sticky="w", padx=4, pady=(6, 0))
-        ttk.Label(g1, text="낮을수록 용량↓", foreground=GRAY).grid(row=1, column=2, sticky="w", pady=(6, 0))
+        self.sizer = SizeCropPanel(opt, app, "im", width=900, enable=True, on_change=self._preview_later)
+        self.sizer.pack(fill="x")
 
         g2 = ttk.LabelFrame(opt, text=" 포맷 변환 ", padding=8)
         g2.pack(fill="x", pady=8)
         self.fmt = tk.StringVar(value=s.get("fmt", "원본 유지"))
         for i, name in enumerate(core.FORMATS):
             ttk.Radiobutton(g2, text=name, value=name, variable=self.fmt).grid(row=0, column=i, padx=3)
+        ttk.Label(g2, text="품질(JPG·WEBP)").grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self.quality = tk.IntVar(value=s.get("quality", 90))
+        ttk.Spinbox(g2, from_=10, to=100, textvariable=self.quality, width=5).grid(row=1, column=2, sticky="w", pady=(6, 0))
 
         g3 = ttk.LabelFrame(opt, text=" 파일명 일괄 변경 ", padding=8)
         g3.pack(fill="x")
@@ -105,7 +105,7 @@ class ImageTab(ttk.Frame):
         ttk.Label(g3, text="자릿수").grid(row=1, column=2, sticky="e", pady=(6, 0))
         self.digits = tk.IntVar(value=s.get("digits", 3))
         ttk.Spinbox(g3, from_=1, to=6, textvariable=self.digits, width=4).grid(row=1, column=3, sticky="w", padx=4, pady=(6, 0))
-        ttk.Label(g3, text="{이름} 원래 이름 · {번호} 순번 · {날짜} 오늘", foreground=GRAY).grid(
+        WrapLabel(g3, text="{이름} 원래 이름 · {번호} 순번 · {날짜} 오늘", foreground=GRAY).grid(
             row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self.preview_lbl = ttk.Label(g3, text="", foreground="#0a5")
         self.preview_lbl.grid(row=3, column=0, columnspan=4, sticky="w")
@@ -134,8 +134,8 @@ class ImageTab(ttk.Frame):
         self.run_btn.pack(fill="x", pady=(4, 8), ipady=4)
         self.prog = ttk.Progressbar(opt, mode="determinate")
         self.prog.pack(fill="x")
-        self.result_lbl = ttk.Label(opt, text="", wraplength=280, justify="left")
-        self.result_lbl.pack(anchor="w", pady=(6, 0))
+        self.result_lbl = WrapLabel(opt, text="")
+        self.result_lbl.pack(fill="x", pady=(6, 0))
         self._name_preview()
 
     # ── 목록 ──
@@ -160,7 +160,11 @@ class ImageTab(ttk.Frame):
     def _drop(self, paths):
         out = []
         for p in paths:
-            out += core.list_images(p, self.sub_var.get()) if os.path.isdir(p) else [p]
+            if os.path.isdir(p):
+                imgs = core.list_images(p, self.sub_var.get())
+                out += imgs or core.list_images(p, True)   # 바로 아래에 없으면 하위 폴더까지
+            else:
+                out.append(p)
         self._add(out)
 
     def _add_files(self):
@@ -170,7 +174,7 @@ class ImageTab(ttk.Frame):
     def _add_folder(self):
         d = filedialog.askdirectory()
         if d:
-            self._add(core.list_images(d, self.sub_var.get()))
+            self._drop([d])
 
     def _remove_sel(self):
         for iid in self.tree.selection():
@@ -186,9 +190,39 @@ class ImageTab(ttk.Frame):
         self.prog["value"] = 0
         self.preview.show(None, None)
 
+    def _preview_later(self):
+        if getattr(self, "_pv_job", None):
+            self.after_cancel(self._pv_job)
+        self._pv_job = self.after(300, self._preview)
+
+    def _proc_kw(self):
+        g = self.sizer.get()
+        return {"crop_on": g["on"], "trim": g["trim"], "aspect": g["aspect"],
+                "base": self.adjust.get() if self.adj_on.get() else {}}
+
     def _preview(self):
+        self._pv_job = None
         sel = self.tree.selection()
-        self.preview.show(sel[0] if sel else None, self.adjust.get, self.files)
+        kw = self._proc_kw()
+        self.preview.show(sel[0] if sel else None, lambda im, sc: core.preview_process(im, sc, **kw), self.files)
+
+    def _range_cfg(self):
+        d = core.DEFAULT_RANDOM_RANGE["manage"]
+        cfg = {k: list(v) for k, v in d.items()}
+        cfg.update(self.app.settings.get("im_rrange", {}))
+        return d, cfg
+
+    def _range_dialog(self):
+        d, _ = self._range_cfg()
+        RandomRangeDialog(self, self.app, "im_rrange", d)
+
+    def _randomize(self):
+        rng = random.Random()
+        self.adjust.randomize(rng)
+        self.adj_on.set(True)
+        if self.sizer.get()["on"]:
+            self.sizer.apply_random(rng, self._range_cfg()[1])
+        self._preview()
 
     def _mode_changed(self):
         st = "normal" if self.out_mode.get() == "custom" else "disabled"
@@ -212,8 +246,8 @@ class ImageTab(ttk.Frame):
             pass
 
     def _opts(self):
-        mode = {"가로 최대(px)": "width", "긴 변 최대(px)": "long", "비율(%)": "percent"}[self.rs_mode.get()]
-        return {"resize": self.rs_on.get(), "resize_mode": mode, "resize_value": int(self.rs_val.get()),
+        """한 번 실행하는 묶음 전체에 똑같이 쓰는 조건"""
+        return {"resize": False, "crop": self.sizer.get(),
                 "fmt": self.fmt.get(), "quality": int(self.quality.get()), "rename": self.rn_on.get(),
                 "pattern": self.pattern.get(), "digits": int(self.digits.get()),
                 "adjust": self.adjust.get() if self.adj_on.get() else {}}
@@ -221,8 +255,7 @@ class ImageTab(ttk.Frame):
     def remember(self):
         s = self.app.settings
         try:
-            s.update(rs_on=self.rs_on.get(), rs_mode=self.rs_mode.get(), rs_val=int(self.rs_val.get()),
-                     quality=int(self.quality.get()), fmt=self.fmt.get(), rn_on=self.rn_on.get(),
+            s.update(quality=int(self.quality.get()), fmt=self.fmt.get(), rn_on=self.rn_on.get(),
                      pattern=self.pattern.get(), digits=int(self.digits.get()), img_out=self.out_dir.get(),
                      img_out_mode=self.out_mode.get(), im_adj_on=self.adj_on.get())
         except Exception:

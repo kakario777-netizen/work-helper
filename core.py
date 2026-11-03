@@ -193,7 +193,8 @@ def natural_sorted(items):
 def list_images(folder, recursive=False):
     found = []
     if recursive:
-        for root, _, files in os.walk(folder):
+        for root, dirs, files in os.walk(folder):
+            dirs[:] = [d for d in dirs if d.lower() != "output"]   # 결과 폴더는 다시 넣지 않음
             for f in files:
                 if os.path.splitext(f)[1].lower() in IMAGE_EXT:
                     found.append(os.path.join(root, f))
@@ -245,12 +246,15 @@ def process_image(src, out_dir, index, opts):
     has_adj = any(float(v or 0) for v in adj.values())
 
     # 크기·형식·색감 변경이 없으면 원본 그대로 복사(화질 손실 없음)
-    if not opts.get("resize") and not fmt_info and not has_adj:
+    if not opts.get("resize") and not fmt_info and not has_adj and not (opts.get("crop") or {}).get("on"):
         shutil.copy2(src, dst)
         return dst, before, os.path.getsize(dst)
 
     with Image.open(src) as im:
         im = ImageOps.exif_transpose(im)
+        crop = opts.get("crop") or {}
+        if crop.get("on"):
+            im = crop_resize(im, crop.get("width"), crop.get("trim", 0), crop.get("aspect", 0))
         if opts.get("resize"):
             w, h = im.size
             v = max(1, int(opts.get("resize_value", 100)))
@@ -305,8 +309,8 @@ ADJUSTS = [
     ("gamma", "감마", -50, 50),
     ("highlights", "하이라이트", -50, 50),
     ("shadows", "그림자", -50, 50),
-    ("temperature", "색온도(파랑↔주황)", -50, 50),
-    ("tint", "색조(초록↔자홍)", -50, 50),
+    ("temperature", "색온도", -50, 50),
+    ("tint", "색조", -50, 50),
     ("hue", "색상 회전", -30, 30),
     ("red", "빨강", -30, 30),
     ("green", "초록", -30, 30),
@@ -314,7 +318,7 @@ ADJUSTS = [
     ("sharpness", "선명도", -100, 100),
     ("blur", "흐림", 0, 30),
     ("noise", "노이즈", 0, 30),
-    ("vignette", "가장자리 어둡게", 0, 50),
+    ("vignette", "모서리 어둡게", 0, 50),
 ]
 
 
@@ -388,8 +392,9 @@ RANDOM_AMP = {
 ONE_SIDED = {"blur", "noise", "vignette"}
 
 DEFAULT_RANDOM_RANGE = {
-    "image": {"len": [760, 940], "trim": [2, 12], "aspect": [2.0, 6.0]},
-    "thumb": {"len": [720, 980], "trim": [2, 12], "aspect": [2.0, 6.0]},
+    "image": {"len": [760, 940], "trim": [2, 12], "aspect": [0.5, 4.0]},
+    "thumb": {"len": [720, 980], "trim": [2, 12], "aspect": [0.5, 4.0]},
+    "manage": {"len": [760, 940], "trim": [2, 12], "aspect": [0.5, 4.0]},
 }
 
 
@@ -408,17 +413,13 @@ def random_adjust(rng, keys):
 
 
 def random_size(rng, cfg):
-    """긴 변(1px 단위)·테두리·비율 흔들림을 cfg 범위 안에서 무작위.
-    cfg = {"len":[최소,최대], "trim":[최소,최대], "aspect":[최소,최대]}"""
+    """가로변(1px 단위)·테두리·세로 비율 조정을 cfg 범위 안에서 '한 값씩' 무작위.
+    cfg = {"len":[최소,최대], "trim":[최소,최대], "aspect":[최소,최대]}  비율은 +/- 방향도 무작위"""
     a, b = sorted(int(x) for x in cfg["len"])
-    span = b - a
-    lmin = rng.randint(a, a + span // 2)
-    lmax = rng.randint(min(b, lmin + max(1, span // 10)), b) if span else a
     ta, tb = sorted(int(x) for x in cfg["trim"])
-    tmin = rng.randint(ta, ta + (tb - ta) // 2)
-    tmax = rng.randint(tmin, tb)
     aa, ab = sorted(float(x) for x in cfg["aspect"])
-    return {"lmin": lmin, "lmax": lmax, "tmin": tmin, "tmax": tmax, "aspect": _r1(rng.uniform(aa, ab))}
+    return {"width": rng.randint(a, b), "trim": rng.randint(ta, tb),
+            "aspect": _r1(rng.choice((-1, 1)) * rng.uniform(aa, ab))}
 
 
 def micro_jitter(rng):
@@ -446,34 +447,38 @@ def _load_rgb(src_path):
         return im.convert("RGB")
 
 
-def make_variant(src_path, rng, lmin=800, lmax=900, tmin=2, tmax=8, aspect=3.0, base=None, micro=True):
-    """원본 테두리를 몇 픽셀씩(변마다 다르게) 먼저 잘라낸 뒤, 이미지 전체를 확대·축소해 긴 변을 lmin~lmax로 맞추되
-    가로·세로 비율을 ±aspect% 안에서 살짝 어긋나게, 색감은 base + 미세 흔들림.
-    반환: (이미지, 설명)"""
+def crop_resize(im, width=None, trim=0, aspect=0.0, scale=1.0):
+    """1) 원본 테두리를 네 변 모두 trim 픽셀씩 잘라냄 (한 변 최대 4%)
+    2) 가로를 width 로 확대·축소, 세로는 원래 비율에서 aspect% 만큼 늘리거나 줄임
+    scale: 미리보기처럼 작게 줄인 이미지일 때 원본 대비 배율 (테두리 픽셀을 그만큼 줄여 적용)"""
     from PIL import Image
-    im = _load_rgb(src_path)
     W, H = im.size
-    L = rng.randint(min(lmin, lmax), max(lmin, lmax))
-    lo, hi = sorted((max(0, int(tmin)), max(0, int(tmax))))
-    # 1) 원본에서 테두리를 변마다 다른 픽셀만큼 먼저 잘라냄 (한 변당 최대 4%까지만)
-    cut = [min(rng.randint(lo, hi), (W if i % 2 == 0 else H) * 0.04) for i in range(4)]
-    box = (int(cut[0]), int(cut[1]), int(W - cut[2]), int(H - cut[3]))
-    if box[2] - box[0] > 10 and box[3] - box[1] > 10:
+    t = max(0.0, float(trim or 0)) * scale
+    cx, cy = min(t, W * 0.04), min(t, H * 0.04)
+    box = (int(round(cx)), int(round(cy)), int(round(W - cx)), int(round(H - cy)))
+    if box[2] - box[0] > 10 and box[3] - box[1] > 10 and (cx or cy):
         im = im.crop(box)
-    # 2) 자른 이미지를 통째로 확대·축소해서 긴 변을 L 픽셀로 (자르지 않음)
     cw, ch = im.size
-    j = 1 + rng.uniform(-aspect, aspect) / 100
-    if cw >= ch:
-        ow, oh = L, round(L * ch / cw * j)
-    else:
-        oh, ow = L, round(L * cw / ch * j)
-    im = im.resize((max(20, ow), max(20, oh)), Image.LANCZOS)
-    params = dict(base or {})
-    if micro:
-        for k, v in micro_jitter(rng).items():
-            params[k] = float(params.get(k, 0) or 0) + v
-    im = apply_adjust(im, params)
+    ow = int(width) if width else cw
+    oh = round(ow * ch / cw * (1 + float(aspect or 0) / 100))
+    if (ow, oh) != (cw, ch):
+        im = im.resize((max(20, ow), max(20, oh)), Image.LANCZOS)
+    return im
+
+
+def make_variant(src_path, rng=None, width=850, trim=4, aspect=0.0, base=None, **_old):
+    """정해진 조건(가로·테두리·비율·색감) 그대로 한 장 변환. 반환: (이미지, 설명)"""
+    im = _load_rgb(src_path)
+    im = crop_resize(im, width, trim, aspect)
+    im = apply_adjust(im, base or {})
     return im, f"{im.size[0]}x{im.size[1]}"
+
+
+def preview_process(im, scale, width=None, trim=0, aspect=0.0, base=None, crop_on=True, **_old):
+    """미리보기용: 작게 줄인 이미지에 같은 조건을 비율대로 적용"""
+    if crop_on:
+        im = crop_resize(im, None, trim, aspect, scale=scale)
+    return apply_adjust(im, base or {})
 
 
 def save_with_new_meta(im, path, rng):
