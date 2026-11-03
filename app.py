@@ -459,6 +459,9 @@ def main():
             from PIL import Image as I
             print("thumbs:", [I.open(os.path.join(th, f)).size for f in sorted(os.listdir(th))], flush=True)
             print("dnd:", bool(TkinterDnD), "docs:", known_folder("documents"), flush=True)
+            junk = os.path.join(tmp, "지울파일.jpg")
+            open(junk, "wb").write(b"x")
+            print("recycle:", core.recycle([junk]), os.path.exists(junk), flush=True)
             print("frozen:", updater.is_frozen(), flush=True)
             print("selftest ok", flush=True)
         root.after(800, test)

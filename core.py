@@ -1,5 +1,6 @@
 """업무 도우미 - 화면과 상관없는 가공 로직 모음"""
 import os
+import sys
 import re
 import shutil
 from datetime import datetime, timedelta
@@ -290,6 +291,34 @@ def process_image(src, out_dir, index, opts):
             kw = {"optimize": True}
         im.save(dst, pil_fmt, **kw)
     return dst, before, os.path.getsize(dst)
+
+
+def recycle(paths):
+    """파일을 휴지통으로 보냄(윈도우). 반환: 실제로 옮겨진 개수"""
+    paths = [os.path.abspath(p) for p in paths if os.path.exists(p)]
+    if not paths:
+        return 0
+    if sys.platform != "win32":
+        for p in paths:
+            os.remove(p)
+        return len(paths)
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT),
+                    ("pFrom", wintypes.LPCWSTR), ("pTo", wintypes.LPCWSTR),
+                    ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
+    FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 0x4, 0x10, 0x40, 0x400
+    done = 0
+    for i in range(0, len(paths), 200):   # 한 번에 너무 길지 않게 나눠서
+        chunk = paths[i:i + 200]
+        op = SHFILEOPSTRUCTW(None, FO_DELETE, "\0".join(chunk) + "\0\0", None,
+                             FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI, False, None, None)
+        ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+        done += sum(1 for p in chunk if not os.path.exists(p))
+    return done
 
 
 def human_size(n):

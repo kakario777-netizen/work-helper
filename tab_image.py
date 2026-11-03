@@ -131,7 +131,10 @@ class ImageTab(ttk.Frame):
         self._mode_changed()
 
         self.run_btn = ttk.Button(opt, text="실행", style="Big.TButton", command=self._run)
-        self.run_btn.pack(fill="x", pady=(4, 8), ipady=4)
+        self.run_btn.pack(fill="x", pady=(4, 4), ipady=4)
+        self.del_src = tk.BooleanVar(value=s.get("im_del_src", False))
+        ttk.Checkbutton(opt, text="가공해서 저장한 뒤 원본은 삭제 (휴지통으로)",
+                        variable=self.del_src).pack(anchor="w", pady=(0, 8))
         self.prog = ttk.Progressbar(opt, mode="determinate")
         self.prog.pack(fill="x")
         self.result_lbl = WrapLabel(opt, text="")
@@ -255,7 +258,7 @@ class ImageTab(ttk.Frame):
     def remember(self):
         s = self.app.settings
         try:
-            s.update(quality=int(self.quality.get()), fmt=self.fmt.get(), rn_on=self.rn_on.get(),
+            s.update(im_del_src=self.del_src.get(), quality=int(self.quality.get()), fmt=self.fmt.get(), rn_on=self.rn_on.get(),
                      pattern=self.pattern.get(), digits=int(self.digits.get()), img_out=self.out_dir.get(),
                      img_out_mode=self.out_mode.get(), im_adj_on=self.adj_on.get())
         except Exception:
@@ -279,6 +282,11 @@ class ImageTab(ttk.Frame):
         if custom and not out:
             messagebox.showinfo(APP_NAME, "저장할 폴더를 지정해주세요.")
             return
+        del_src = self.del_src.get()
+        if del_src and not messagebox.askyesno(
+                APP_NAME, f"가공해서 저장이 끝난 원본 {len(self.files)}개를 휴지통으로 보냅니다.\n"
+                          "(저장에 실패한 파일은 지우지 않습니다. 휴지통에서 되살릴 수 있어요)\n\n계속할까요?"):
+            return
         self.remember()
         files = list(self.files)
         self.prog.config(maximum=len(files), value=0)
@@ -289,19 +297,26 @@ class ImageTab(ttk.Frame):
             before = after = ok = 0
             errors = []
             last_dir = None
+            done_src = []
             for i, src in enumerate(files):
                 d = out if custom else os.path.join(os.path.dirname(src), "output")
                 try:
                     os.makedirs(d, exist_ok=True)
-                    _, b, a = core.process_image(src, d, start + i, opts)
+                    dst, b, a = core.process_image(src, d, start + i, opts)
                     before += b
                     after += a
                     ok += 1
                     last_dir = d
+                    if os.path.normcase(os.path.abspath(dst)) != os.path.normcase(os.path.abspath(src)):
+                        done_src.append(src)
                 except Exception as e:
                     errors.append(f"{os.path.basename(src)}: {e}")
                 self.q.put(("prog", i + 1))
-            self.q.put(("done", ok, before, after, errors, last_dir))
+            removed = []
+            if del_src and done_src:
+                core.recycle(done_src)
+                removed = [p for p in done_src if not os.path.exists(p)]
+            self.q.put(("done", ok, before, after, errors, last_dir, removed))
 
         self.worker = threading.Thread(target=work, daemon=True)
         self.worker.start()
@@ -314,12 +329,19 @@ class ImageTab(ttk.Frame):
                 if msg[0] == "prog":
                     self.prog["value"] = msg[1]
                 elif msg[0] == "done":
-                    _, ok, b, a, errors, last_dir = msg
+                    _, ok, b, a, errors, last_dir, removed = msg
                     self.run_btn.config(state="normal")
+                    for p in removed:   # 지운 원본은 목록에서도 뺌
+                        if self.tree.exists(p):
+                            self.tree.delete(p)
+                        if p in self.files:
+                            self.files.remove(p)
+                    self.count_lbl.config(text=f"{len(self.files)}개")
                     pct = f" ({(1 - a / b) * 100:.0f}% 줄임)" if b and a < b else ""
                     self.result_lbl.config(
                         text=f"완료 {ok}개 · {core.human_size(b)} → {core.human_size(a)}{pct}"
-                             + (f" · 실패 {len(errors)}개" if errors else ""))
+                             + (f" · 실패 {len(errors)}개" if errors else "")
+                             + (f" · 원본 {len(removed)}개 휴지통으로" if removed else ""))
                     if errors:
                         messagebox.showwarning(APP_NAME, "일부 파일을 처리하지 못했습니다.\n\n" + "\n".join(errors[:15]))
                     if last_dir and messagebox.askyesno(APP_NAME, "완료했습니다. 결과 폴더를 열까요?"):
