@@ -87,6 +87,13 @@ jobs:
           if (!(Test-Path $exe)) { Write-Error "설치 실패"; exit 1 }
           Get-ChildItem "$env:PUBLIC\Desktop","$env:USERPROFILE\Desktop" -Filter *.lnk -ErrorAction SilentlyContinue | Format-Table Name
           (Get-Item $exe).VersionInfo | Format-List FileVersion, CompanyName, ProductName
+          # 업데이트(두 번째 설치) 때는 바탕화면 바로가기를 다시 만들지 않는지 확인
+          $lnk = Get-ChildItem "$env:PUBLIC\Desktop" -Filter "업무 도우미.lnk" -ErrorAction SilentlyContinue
+          if (!$lnk) { Write-Error "처음 설치 때 바로가기가 없음"; exit 1 }
+          Remove-Item $lnk.FullName
+          Start-Process -FilePath "installer_out\WorkHelper_Setup.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          if (Test-Path "$env:PUBLIC\Desktop\업무 도우미.lnk") { Write-Error "업데이트 때 바로가기를 다시 만듦"; exit 1 }
+          Write-Host "업데이트 때 바로가기 안 만듦: OK"
 
       - name: 릴리스에 올리기
         uses: softprops/action-gh-release@v2
