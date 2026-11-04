@@ -76,6 +76,8 @@ class LibraryTab(ttk.Frame):
         self.tree.pack(side="left", fill="both", expand=True)
         tsb.pack(side="right", fill="y")
         self.tree.bind("<<TreeviewSelect>>", self._tree_selected)
+        self.tree.bind("<Double-1>", lambda e: (self.tree.identify_row(e.y) and self._is_bundle(self.tree.identify_row(e.y))
+                                                and self._open_bundle(self.tree.identify_row(e.y))))
         for w in (self.tree, self.grid_sf.canvas, self.grid_sf.inner, left):
             enable_drop(w, self._dropped)
 
@@ -209,11 +211,25 @@ class LibraryTab(ttk.Frame):
 
     def reload(self, select=None):
         self.groups = []
+        self.procs = []   # 시술 하나하나 (묶음 안 시술 포함) — 원고 이미지 배치에서 씀
         for name in core.natural_sorted(os.listdir(self.lib)):
             d = os.path.join(self.lib, name)
-            if os.path.isdir(d):
-                m = self._read_meta(d)
-                self.groups.append((d, m["hospital"], m["procedure"], len(core.list_images(d))))
+            if not os.path.isdir(d):
+                continue
+            m = self._read_meta(d)
+            if self._is_bundle(d):
+                subs = self._bundle_subs(d)
+                total = 0
+                for sd in subs:
+                    sm = self._read_meta(sd)
+                    k = len(core.list_images(sd))
+                    total += k
+                    self.procs.append((sd, m["hospital"], sm["procedure"], k))
+                self.groups.append((d, m["hospital"], f"시술 {len(subs)}개", total))
+            else:
+                n = len(core.list_images(d))
+                self.groups.append((d, m["hospital"], m["procedure"], n))
+                self.procs.append((d, m["hospital"], m["procedure"], n))
         alive = {g[0] for g in self.groups}
         self.sel = [d for d in ([select] if select else self.sel) if d in alive]
         self.tree.delete(*self.tree.get_children())
@@ -253,6 +269,20 @@ class LibraryTab(ttk.Frame):
                              relief="groove", bd=2, width=1, height=6, font=FONT, cursor="hand2")
                 t.bind("<Button-1>", lambda e: self._add_folder())
                 enable_drop(t, self._dropped)
+            elif self.is_img and self._is_bundle(g[0]):
+                d, h, p, n = g
+                t = tk.Frame(inner, bg="#b9c3cf", bd=0)
+                lbl = tk.Label(t, text=f"{h}\n{p}\n{n}장", bg=NORM_BG, relief="raised", bd=2,
+                               width=1, height=4, font=FONT, cursor="hand2", wraplength=TILE_MIN - 12)
+                lbl.pack(fill="both", expand=True)
+                btn = tk.Button(t, text="세부 선택", font=("맑은 고딕", 9, "bold"), bg="#e8eef7", relief="raised",
+                                bd=2, cursor="hand2", command=lambda d=d: self._open_bundle(d))
+                btn.pack(fill="x")
+                lbl.bind("<Button-1>", lambda e, d=d: self._tile_click(e, d))
+                lbl.bind("<Double-Button-1>", lambda e, d=d: self._open_bundle(d))
+                for w in (t, lbl):
+                    enable_drop(w, lambda paths, d=d: self._dropped(paths, target=d))
+                self.tiles[d] = lbl
             else:
                 d, h, p, n = g
                 sub = p if self.is_img else "썸네일"
@@ -350,21 +380,32 @@ class LibraryTab(ttk.Frame):
 
     def _dropped(self, paths, target=None):
         groups, loose = [], []
+        parent_name = None
         for p in paths:
             if os.path.isdir(p):
                 imgs = core.list_images(p)
                 if imgs:
                     groups.append((os.path.basename(os.path.normpath(p)), imgs))
-                else:  # 상위 폴더를 넣으면 하위 폴더 하나하나를 항목으로
+                else:  # 상위 폴더를 넣으면 하위 폴더 하나하나를 시술로
+                    found = 0
                     for sub in core.natural_sorted(os.listdir(p)):
                         sp = os.path.join(p, sub)
                         if os.path.isdir(sp):
                             si = core.list_images(sp, recursive=True)
                             if si:
                                 groups.append((sub, si))
+                                found += 1
+                    if found and len(paths) == 1:
+                        parent_name = os.path.basename(os.path.normpath(p))
             elif os.path.splitext(p)[1].lower() in core.IMAGE_EXT:
                 loose.append(p)
-        if loose and target:
+        # 묶음 칸 위에 폴더를 놓으면 그 병원의 시술로 추가
+        if target and self.is_img and self._is_bundle(target) and groups:
+            self._add_to_bundle(target, groups)
+            self.reload(select=target)
+            self.app.status(f"시술 {len(groups)}개를 추가했습니다.")
+            return
+        if loose and target and not self._is_bundle(target):
             self._copy_into(target, loose)
             if not groups:
                 self.reload(select=target)
@@ -375,17 +416,79 @@ class LibraryTab(ttk.Frame):
         if not groups:
             messagebox.showinfo(APP_NAME, "이미지가 들어 있는 폴더를 넣어주세요.")
             return
+        bundle_name = None
+        if self.is_img and len(groups) > 1:
+            guesses = [self._guess_names(n)[0] for n, _ in groups]
+            same = len(set(guesses)) == 1 and any(self._guess_names(n)[1] for n, _ in groups)
+            bundle_name = parent_name or (guesses[0] if same else None)
+            if not bundle_name:
+                ans = messagebox.askyesnocancel(
+                    APP_NAME, f"폴더 {len(groups)}개를 넣었습니다.\n\n"
+                              "예: 한 병원으로 묶기 (칸 하나 + 세부 선택)\n아니요: 폴더마다 따로 칸 만들기")
+                if ans is None:
+                    return
+                if ans:
+                    bundle_name = os.path.commonprefix(guesses).strip(" -_") or guesses[0]
         self.app.root.config(cursor="watch")
         self.app.root.update()
         last = None
         try:
-            for name, files in groups:
-                h, p = self._guess_names(name)
-                last = self._new_group(h, p, files)
+            if bundle_name:
+                last = self._new_bundle(bundle_name, groups)
+            else:
+                for name, files in groups:
+                    h, p = self._guess_names(name)
+                    last = self._new_group(h, p, files)
         finally:
             self.app.root.config(cursor="")
         self.reload(select=last)
-        self.app.status(f"{len(groups)}개 항목을 보관했습니다. 이름이 맞는지 확인해주세요.")
+        if bundle_name:
+            self.app.status(f"'{bundle_name}' 한 칸으로 시술 {len(groups)}개를 보관했습니다. 병원 이름이 맞는지 확인해주세요.")
+        else:
+            self.app.status(f"{len(groups)}개 항목을 보관했습니다. 이름이 맞는지 확인해주세요.")
+
+    # ── 묶음(한 병원 · 여러 시술) ──
+    def _is_bundle(self, d):
+        return bool(d) and bool(self._meta_raw(d).get("bundle"))
+
+    def _bundle_subs(self, d):
+        try:
+            names = core.natural_sorted(os.listdir(d))
+        except OSError:
+            return []
+        return [os.path.join(d, x) for x in names
+                if os.path.isdir(os.path.join(d, x)) and core.list_images(os.path.join(d, x))]
+
+    def _new_bundle(self, hospital, groups):
+        base = self._safe(hospital)
+        d = os.path.join(self.lib, base)
+        n = 2
+        while os.path.exists(d):
+            d = os.path.join(self.lib, f"{base} ({n})")
+            n += 1
+        os.makedirs(d)
+        self._write_meta(d, hospital, "", bundle=True)
+        self._add_to_bundle(d, groups)
+        return d
+
+    def _add_to_bundle(self, d, groups):
+        hospital = self._read_meta(d)["hospital"]
+        for name, files in groups:
+            h, p = self._guess_names(name)
+            proc = p if (h == hospital and p) else name
+            sd = os.path.join(d, self._safe(proc))
+            k = 2
+            while os.path.exists(sd):
+                sd = os.path.join(d, f"{self._safe(proc)} ({k})")
+                k += 1
+            os.makedirs(sd)
+            self._write_meta(sd, hospital, proc)
+            self._copy_into(sd, files)
+
+    def _open_bundle(self, d):
+        self.sel = [d]
+        self._sync_selection()
+        BundleDialog(self, d)
 
     def _add_folder(self):
         d = filedialog.askdirectory()
@@ -412,7 +515,14 @@ class LibraryTab(ttk.Frame):
         self.reload()
 
     def _on_select(self):
-        if len(self.sel) == 1:
+        if len(self.sel) == 1 and self._is_bundle(self.sel[0]):
+            m = self._read_meta(self.sel[0])
+            self.h_var.set(m["hospital"])
+            self.p_var.set("")
+            subs = self._bundle_subs(self.sel[0])
+            tot = sum(len(core.list_images(x)) for x in subs)
+            self.info_lbl.config(text=f"묶음 칸 · 시술 {len(subs)}개 · 총 {tot}장 (세부 선택에서 만들기)")
+        elif len(self.sel) == 1:
             m = self._read_meta(self.sel[0])
             self.h_var.set(m["hospital"])
             self.p_var.set(m["procedure"])
@@ -453,6 +563,10 @@ class LibraryTab(ttk.Frame):
         if not h:
             messagebox.showinfo(APP_NAME, "병원명을 입력해주세요.")
             return
+        if self._is_bundle(d):
+            p = ""
+            for sd in self._bundle_subs(d):
+                self._write_meta(sd, h)
         self._write_meta(d, h, p)
         target = os.path.join(self.lib, self._safe(f"{h} {p}".strip()))
         if os.path.normcase(target) != os.path.normcase(d) and not os.path.exists(target):
@@ -499,6 +613,9 @@ class LibraryTab(ttk.Frame):
     def _update_preview(self):
         self._pv_job = None
         imgs = core.list_images(self.sel[0]) if self.sel else []
+        if self.sel and not imgs and self._is_bundle(self.sel[0]):
+            subs = self._bundle_subs(self.sel[0])
+            imgs = core.list_images(subs[0]) if subs else []
         kw = self._params()
         self.preview.show(imgs[0] if imgs else None, lambda im, sc: core.preview_process(im, sc, **kw), imgs)
 
@@ -544,6 +661,9 @@ class LibraryTab(ttk.Frame):
             pass
 
     def _keyword_dialog(self):
+        if len(self.sel) == 1 and self._is_bundle(self.sel[0]):
+            messagebox.showinfo(APP_NAME, "묶음 칸은 '세부 선택'을 눌러 시술을 고른 뒤 만들어주세요.")
+            return
         if len(self.sel) != 1:
             messagebox.showinfo(APP_NAME, "키워드를 만들 병원 항목 하나를 먼저 선택해주세요.")
             return
@@ -558,6 +678,16 @@ class LibraryTab(ttk.Frame):
         if not self.sel:
             messagebox.showinfo(APP_NAME, "만들 항목을 먼저 선택해주세요.")
             return
+        bundles = [d for d in self.sel if self._is_bundle(d)]
+        if bundles:
+            if len(self.sel) == 1:
+                BundleDialog(self, bundles[0])
+                return
+            self.sel = [d for d in self.sel if d not in bundles]
+            self._sync_selection()
+            messagebox.showinfo(APP_NAME, "묶음 칸(여러 시술)은 칸 아래 '세부 선택'에서 따로 만들어주세요.\n나머지 항목만 만듭니다.")
+            if not self.sel:
+                return
         try:
             count = int(self.count.get())
             kw = self._params()
@@ -805,6 +935,268 @@ class KeywordDialog(tk.Toplevel):
                         self.open_btn.config(state="normal")
                     if err:
                         messagebox.showerror(APP_NAME, f"만드는 중 문제가 생겼습니다.\n{err}", parent=self)
+                    return
+        except queue.Empty:
+            pass
+        if self.winfo_exists():
+            self.after(80, self._poll)
+
+
+class BundleDialog(tk.Toplevel):
+    """묶음 칸 '세부 선택': 왼쪽 시술 목록(체크) → 오른쪽에서 체크한 것만 만들기
+    결과: 바탕화면\\병원명\\시술 (n)\\output\\…   (바탕화면에 병원명 폴더가 있으면 '병원명 가공 1', '가공 2' …)"""
+    ON, OFF = "☑", "☐"
+
+    def __init__(self, tab, bundle_dir):
+        super().__init__(tab.app.root)
+        self.tab, self.bundle = tab, bundle_dir
+        self.app = tab.app
+        m = tab._read_meta(bundle_dir)
+        raw = tab._meta_raw(bundle_dir)
+        self.hospital = m["hospital"]
+        self.title(f"세부 선택 - {self.hospital}")
+        self.transient(self.app.root)
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = int(sw * 0.75), int(sh * 0.75)
+        self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 3}")
+        self.minsize(820, 520)
+        self.q = queue.Queue()
+        self.worker = None
+        checked = raw.get("checked")   # None = 처음 → 전부 체크
+        opts = raw.get("bundle_opts", {})
+
+        body = Paned(self, self.app, "bundle_main")
+        body.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # ── 왼쪽: 시술 목록 ──
+        left = ttk.Frame(body)
+        body.add(left, weight=1, width=int(w * 0.42), minsize=280)
+        lh = ttk.Frame(left)
+        lh.pack(fill="x")
+        ttk.Label(lh, text=f"{self.hospital} · 시술 목록", font=FONT_B).pack(side="left")
+        help_label(lh, "왼쪽 칸(☑/☐)을 클릭하면 체크가 바뀝니다. 체크한 시술만 만들어집니다.\n"
+                       "줄을 클릭하면 오른쪽에 그 시술 미리보기가 나옵니다.\n"
+                       "이 창에 시술 폴더를 더 끌어다 놓으면 이 병원에 추가됩니다.").pack(side="left", padx=8)
+        ttk.Button(lh, text="전체 해제", command=lambda: self._set_all(False)).pack(side="right")
+        ttk.Button(lh, text="전체 선택", command=lambda: self._set_all(True)).pack(side="right", padx=4)
+        tf = ttk.Frame(left)
+        tf.pack(fill="both", expand=True, pady=6)
+        self.tree = ttk.Treeview(tf, columns=("chk", "proc", "n"), show="headings", selectmode="browse")
+        for cid, t, cw, anc in (("chk", "선택", 50, "center"), ("proc", "시술", 260, "w"), ("n", "장수", 60, "center")):
+            self.tree.heading(cid, text=t)
+            self.tree.column(cid, width=cw, anchor=anc, stretch=cid == "proc")
+        sb = ttk.Scrollbar(tf, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.tree.tag_configure("off", foreground="#999")
+        self.tree.bind("<Button-1>", self._click)
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._preview())
+        for wdg in (self.tree, left):
+            enable_drop(wdg, self._drop)
+        self.count_lbl = ttk.Label(left, text="")
+        self.count_lbl.pack(anchor="w")
+        self.checks = {}
+        self._fill(checked)
+
+        # ── 오른쪽: 미리보기 · 출력 설정 ──
+        rsf = ScrollFrame(body)
+        body.add(rsf, weight=1, minsize=380)
+        right = ttk.Frame(rsf.inner, padding=(12, 0, 8, 0))
+        right.pack(fill="both", expand=True)
+        self.prev = Preview(right, height=170)
+        self.prev.pack(fill="x")
+
+        g = ttk.LabelFrame(right, text=" 출력 ", padding=10)
+        g.pack(fill="x", pady=10)
+        ttk.Label(g, text="출력 폴더 이름").grid(row=0, column=0, sticky="w")
+        self.out_name = tk.StringVar(value=opts.get("name") or self.hospital)
+        ttk.Entry(g, textvariable=self.out_name).grid(row=0, column=1, columnspan=2, sticky="we", padx=6, pady=2)
+        ttk.Label(g, text="폴더 개수 (시술마다)").grid(row=1, column=0, sticky="w")
+        self.count = tk.IntVar(value=opts.get("count", 1))
+        ttk.Spinbox(g, from_=1, to=100, textvariable=self.count, width=6).grid(row=1, column=1, sticky="w", padx=6, pady=2)
+        self.use_output = tk.BooleanVar(value=opts.get("output", True))
+        ttk.Checkbutton(g, text="각 폴더 안에 output 폴더 만들기", variable=self.use_output).grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.rand_once = tk.BooleanVar(value=opts.get("rand_once", False))
+        ttk.Checkbutton(g, text="랜덤 가공 (만들 때 '랜덤'을 새로 누른 값으로)", variable=self.rand_once).grid(
+            row=3, column=0, columnspan=3, sticky="w")
+        self.rand_folder = tk.BooleanVar(value=opts.get("rand_folder", tab.vary.get()))
+        ttk.Checkbutton(g, text="폴더마다 다른 랜덤값", variable=self.rand_folder).grid(
+            row=4, column=0, columnspan=3, sticky="w")
+        help_label(g, "결과: 바탕화면\\출력 폴더 이름\\시술 1\\output\\image001.jpg …\n"
+                      "· 폴더 개수 1이면 '시술' 폴더 하나, 2 이상이면 '시술 1', '시술 2' …\n"
+                      "· 바탕화면에 같은 이름 폴더가 있으면 '병원명 가공 1', '병원명 가공 2' … 로 새로 만듭니다.\n"
+                      "· 가공 값(가로 크기·테두리·비율·색감)과 파일명은 이미지 생성 탭에 맞춰둔 값을 씁니다.\n"
+                      "· 랜덤 가공: 시작할 때 새 랜덤값을 한 번 정해 전체에 씀\n"
+                      "· 폴더마다 다른 랜덤값: 폴더마다 새 랜덤값 (한 폴더 안은 같은 값)").grid(
+            row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        g.columnconfigure(1, weight=1)
+        self.where = WrapLabel(right, text="", foreground="#0a5")
+        self.where.pack(fill="x")
+        for v in (self.out_name,):
+            v.trace_add("write", lambda *a: self._where())
+
+        self.run_btn = ttk.Button(right, text="체크한 시술 만들기", style="Big.TButton", command=self._run)
+        self.run_btn.pack(fill="x", pady=(10, 4), ipady=4)
+        self.prog = ttk.Progressbar(right, mode="determinate")
+        self.prog.pack(fill="x", pady=(6, 4))
+        self.result = WrapLabel(right, text="")
+        self.result.pack(fill="x")
+        self.open_btn = ttk.Button(right, text="결과 폴더 열기", state="disabled",
+                                   command=lambda: open_folder(self.last_root))
+        self.open_btn.pack(anchor="w", pady=(6, 0))
+        self.last_root = None
+        self._where()
+        kids = self.tree.get_children()
+        if kids:
+            self.tree.selection_set(kids[0])
+        self.protocol("WM_DELETE_WINDOW", self._close)
+
+    # ── 목록 ──
+    def _fill(self, checked=None):
+        keep = {k: v for k, v in self.checks.items()}
+        self.tree.delete(*self.tree.get_children())
+        self.checks = {}
+        for sd in self.tab._bundle_subs(self.bundle):
+            name = self.tab._read_meta(sd)["procedure"] or os.path.basename(sd)
+            key = os.path.basename(sd)
+            on = keep.get(sd, True if checked is None else key in checked)
+            self.checks[sd] = on
+            self.tree.insert("", "end", iid=sd, tags=() if on else ("off",),
+                             values=(self.ON if on else self.OFF, name, len(core.list_images(sd))))
+        self._count()
+
+    def _count(self):
+        n = sum(self.checks.values())
+        self.count_lbl.config(text=f"시술 {len(self.checks)}개 중 {n}개 선택")
+
+    def _click(self, e):
+        iid = self.tree.identify_row(e.y)
+        if iid and self.tree.identify_column(e.x) == "#1":
+            self._toggle(iid)
+            return "break"
+
+    def _toggle(self, iid, value=None):
+        on = (not self.checks[iid]) if value is None else value
+        self.checks[iid] = on
+        v = list(self.tree.item(iid, "values"))
+        v[0] = self.ON if on else self.OFF
+        self.tree.item(iid, values=v, tags=() if on else ("off",))
+        self._count()
+
+    def _set_all(self, on):
+        for iid in self.checks:
+            self._toggle(iid, on)
+
+    def _drop(self, paths):
+        self.tab._dropped(paths, target=self.bundle)
+        self._fill()
+
+    def _preview(self):
+        sel = self.tree.selection()
+        imgs = core.list_images(sel[0]) if sel else []
+        kw = self.tab._params()
+        self.prev.show(imgs[0] if imgs else None, lambda im, sc: core.preview_process(im, sc, **kw), imgs)
+
+    # ── 출력 위치 ──
+    def _root(self):
+        desk = known_folder("desktop")
+        base = self.tab._safe(self.out_name.get().strip() or self.hospital)
+        if not os.path.exists(os.path.join(desk, base)):
+            return os.path.join(desk, base)
+        n = 1
+        while os.path.exists(os.path.join(desk, f"{base} 가공 {n}")):
+            n += 1
+        return os.path.join(desk, f"{base} 가공 {n}")
+
+    def _where(self):
+        self.where.config(text=f"저장 위치: 바탕화면\\{os.path.basename(self._root())}\\")
+
+    def _save(self):
+        try:
+            cnt = int(self.count.get())
+        except Exception:
+            cnt = 1
+        self.tab._write_meta(self.bundle, checked=[os.path.basename(k) for k, v in self.checks.items() if v],
+                             bundle_opts={"name": self.out_name.get().strip(), "count": cnt,
+                                          "output": self.use_output.get(), "rand_once": self.rand_once.get(),
+                                          "rand_folder": self.rand_folder.get()})
+
+    def _close(self):
+        try:
+            self._save()
+        except Exception:
+            pass
+        self.destroy()
+
+    # ── 만들기 ──
+    def _run(self):
+        if self.worker and self.worker.is_alive():
+            return
+        procs = [sd for sd, on in self.checks.items() if on]
+        if not procs:
+            messagebox.showinfo(APP_NAME, "만들 시술을 왼쪽에서 체크해주세요.", parent=self)
+            return
+        try:
+            count = max(1, int(self.count.get()))
+            kw = self.tab._params()
+        except Exception:
+            messagebox.showwarning(APP_NAME, "숫자를 확인해주세요.", parent=self)
+            return
+        self._save()
+        jobs = [(sd, self.tab._read_meta(sd)["procedure"] or os.path.basename(sd), core.list_images(sd)) for sd in procs]
+        root = self.last_root = self._root()
+        fresh = self.tab._fresh_factory(kw)
+        name_kw = self.tab._name_kw()
+        use_out, once, per = self.use_output.get(), self.rand_once.get(), self.rand_folder.get()
+        safe = self.tab._safe
+        self.prog.config(maximum=sum(len(f) for _, _, f in jobs) * count, value=0)
+        self.run_btn.config(state="disabled")
+        self.result.config(text="만드는 중...")
+
+        def work():
+            rng = random.Random()
+            done = [0]
+            made = 0
+            run_kw = fresh(rng) if once else kw
+
+            def tick():
+                done[0] += 1
+                self.q.put(("prog", done[0]))
+            try:
+                os.makedirs(root, exist_ok=True)
+                for sd, proc, files in jobs:
+                    for k in range(count):
+                        folder = os.path.join(root, safe(proc) if count == 1 else f"{safe(proc)} {k + 1}")
+                        out = os.path.join(folder, "output") if use_out else folder
+                        core.make_folder_set(files, out, rng, progress=tick, **name_kw,
+                                             **(fresh(rng) if per else run_kw))
+                        made += 1
+                self.q.put(("done", made, None))
+            except Exception as e:
+                self.q.put(("done", made, str(e)))
+
+        self.worker = threading.Thread(target=work, daemon=True)
+        self.worker.start()
+        self._poll()
+
+    def _poll(self):
+        try:
+            while True:
+                msg = self.q.get_nowait()
+                if msg[0] == "prog":
+                    self.prog["value"] = msg[1]
+                else:
+                    _, made, err = msg
+                    self.run_btn.config(state="normal")
+                    self.result.config(text=f"완료: 바탕화면\\{os.path.basename(self.last_root)}\\ 에 폴더 {made}개"
+                                            + (f"\\n오류: {err}" if err else ""))
+                    if made:
+                        self.open_btn.config(state="normal")
+                    self._where()
+                    if err:
+                        messagebox.showerror(APP_NAME, f"만드는 중 문제가 생겼습니다.\\n{err}", parent=self)
                     return
         except queue.Empty:
             pass

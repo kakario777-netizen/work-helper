@@ -496,6 +496,33 @@ def main():
             bl._drop([os.path.join(tmp, "blank", n) for n in os.listdir(os.path.join(tmp, "blank"))])
             bl._run()
             print("blank txt:", sorted(os.listdir(os.path.join(tmp, "blank"))), bl.result.cget("text"), flush=True)
+            # 묶음 칸: 한 병원 폴더(시술 3개) → 칸 하나 + 세부 선택
+            from tab_library import BundleDialog
+            hosp = os.path.join(tmp, "밝은눈")
+            for proc in ("라식", "백내장", "노안"):
+                os.makedirs(os.path.join(hosp, proc))
+                for k in range(2):
+                    Image.effect_mandelbrot((900, 700), (-2, -1.5, 1, 1.5), 40 + k).convert("RGB").save(
+                        os.path.join(hosp, proc, f"{k + 1}.jpg"))
+            n_before = len(cap.groups)
+            cap._dropped([hosp])
+            b = cap.sel[0]
+            print("bundle:", cap._is_bundle(b), len(cap.groups) - n_before, "칸,",
+                  [os.path.basename(x) for x in cap._bundle_subs(b)], flush=True)
+            bd = BundleDialog(cap, b)
+            bd._toggle([k for k in bd.checks if k.endswith("노안")][0], False)
+            bd.count.set(2)
+            desk = os.path.join(tmp, "desk")
+            os.makedirs(os.path.join(desk, "밝은눈"))
+            bd._root = lambda: (lambda d: d if not os.path.exists(d) else os.path.join(desk, "밝은눈 가공 1"))(os.path.join(desk, "밝은눈"))
+            bd._run()
+            bd.worker.join(120)
+            bd._poll()
+            r = os.path.join(desk, "밝은눈 가공 1")
+            print("bundle out:", sorted(os.listdir(r)), sorted(os.listdir(os.path.join(r, "라식 1", "output"))), flush=True)
+            bd._close()
+            cap.sel = [x for x in cap.sel if x != b] or [g[0] for g in cap.groups if not cap._is_bundle(g[0])][:1]
+            cap._sync_selection()
             # 원고 이미지 배치
             pl = app.text_tab.place
             mdir = os.path.join(tmp, "원고")

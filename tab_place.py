@@ -166,7 +166,7 @@ class PlacePanel(ttk.Frame):
         lib = self._lib()
         self._groups = {NONE: None}
         if lib:
-            for d, h, p, n in lib.groups:
+            for d, h, p, n in getattr(lib, "procs", lib.groups):
                 self._groups[f"{h} {p}".strip() + f"  ({n}장)"] = d
         self.combo["values"] = list(self._groups)
 
