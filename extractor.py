@@ -283,9 +283,11 @@ def extract(url):
     host = urllib.parse.urlparse(url).netloc.lower()
     try:
         if "cafe.naver.com" in host:
-            return extract_cafe(url)
+            t, b = extract_cafe(url)
+            return t, _drop_title_line(t, b)
         if "blog.naver.com" in host or "naver.me" in host:
-            return extract_blog(url)
+            t, b = extract_blog(url)
+            return t, _drop_title_line(t, b)
     except ExtractError:
         raise
     except urllib.error.HTTPError as e:
@@ -295,6 +297,19 @@ def extract(url):
     except Exception as e:
         raise ExtractError(f"추출 중 오류: {e}")
     raise ExtractError("네이버 블로그·카페 링크만 지원합니다")
+
+
+def _drop_title_line(title, body):
+    """본문 맨 앞에 제목이 한 번 더 들어 있으면 뺌"""
+    norm = lambda x: re.sub(r"\s+", "", x or "")
+    lines = body.split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if lines and norm(lines[0]) == norm(title):
+        lines.pop(0)
+        while lines and not lines[0].strip():
+            lines.pop(0)
+    return "\n".join(lines)
 
 
 def as_text(title, body):
