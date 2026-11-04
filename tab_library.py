@@ -1100,7 +1100,7 @@ class BundleDialog(tk.Toplevel):
         self.prev.show(imgs[0] if imgs else None, lambda im, sc: core.preview_process(im, sc, **kw), imgs)
 
     # ── 출력 위치 ──
-    def _root(self):
+    def _target_dir(self):
         desk = known_folder("desktop")
         base = self.tab._safe(self.out_name.get().strip() or self.hospital)
         if not os.path.exists(os.path.join(desk, base)):
@@ -1111,7 +1111,7 @@ class BundleDialog(tk.Toplevel):
         return os.path.join(desk, f"{base} 가공 {n}")
 
     def _where(self):
-        self.where.config(text=f"저장 위치: 바탕화면\\{os.path.basename(self._root())}\\")
+        self.where.config(text=f"저장 위치: 바탕화면\\{os.path.basename(self._target_dir())}\\")
 
     def _save(self):
         try:
@@ -1146,7 +1146,7 @@ class BundleDialog(tk.Toplevel):
             return
         self._save()
         jobs = [(sd, self.tab._read_meta(sd)["procedure"] or os.path.basename(sd), core.list_images(sd)) for sd in procs]
-        root = self.last_root = self._root()
+        root = self.last_root = self._target_dir()
         fresh = self.tab._fresh_factory(kw)
         name_kw = self.tab._name_kw()
         use_out, once, per = self.use_output.get(), self.rand_once.get(), self.rand_folder.get()

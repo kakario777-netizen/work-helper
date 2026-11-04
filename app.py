@@ -514,7 +514,7 @@ def main():
             bd.count.set(2)
             desk = os.path.join(tmp, "desk")
             os.makedirs(os.path.join(desk, "밝은눈"))
-            bd._root = lambda: (lambda d: d if not os.path.exists(d) else os.path.join(desk, "밝은눈 가공 1"))(os.path.join(desk, "밝은눈"))
+            bd._target_dir = lambda: (lambda d: d if not os.path.exists(d) else os.path.join(desk, "밝은눈 가공 1"))(os.path.join(desk, "밝은눈"))
             bd._run()
             bd.worker.join(120)
             bd._poll()
