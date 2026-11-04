@@ -11,7 +11,7 @@ import updater
 from common import (APP_NAME, FONT, FONT_B, GRAY, TkinterDnD, PANES, install_wheel, known_folder, load_settings, save_settings)
 from version import VERSION
 from tab_text import TextTab
-from tab_image import ImageTab
+from tab_image import ImageArea
 from tab_library import LibraryTab
 
 
@@ -44,13 +44,14 @@ class App:
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self.text_tab = TextTab(self.nb, self)
-        self.image_tab = ImageTab(self.nb, self)
+        self.image_area = ImageArea(self.nb, self)
+        self.image_tab = self.image_area.main
         self.cap_tab = LibraryTab(self.nb, self, "image")
         self.thumb_tab = LibraryTab(self.nb, self, "thumb")
         # 메인 탭: 키 → (화면, 이름)
         self.tabs = {
             "text": (self.text_tab, "텍스트 정리"),
-            "image": (self.image_tab, "이미지 가공"),
+            "image": (self.image_area, "이미지 가공"),
             "capture": (self.cap_tab, "이미지 생성"),
             "thumb": (self.thumb_tab, "썸네일 생성"),
         }
@@ -488,6 +489,13 @@ def main():
             junk = os.path.join(tmp, "지울파일.jpg")
             open(junk, "wb").write(b"x")
             print("recycle:", core.recycle([junk]), os.path.exists(junk), flush=True)
+            bl = app.image_area.blank
+            for nm in ("서울리더스 치아교정", "밝은눈 라식"):
+                os.makedirs(os.path.join(tmp, "blank", nm), exist_ok=True)
+            open(os.path.join(tmp, "blank", "밝은눈 라식.txt"), "w").close()
+            bl._drop([os.path.join(tmp, "blank", n) for n in os.listdir(os.path.join(tmp, "blank"))])
+            bl._run()
+            print("blank txt:", sorted(os.listdir(os.path.join(tmp, "blank"))), bl.result.cget("text"), flush=True)
             print("frozen:", updater.is_frozen(), flush=True)
             print("selftest ok", flush=True)
         root.after(800, test)

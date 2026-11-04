@@ -391,3 +391,119 @@ class ImageTab(ttk.Frame):
         except queue.Empty:
             pass
         self.after(80, self._poll)
+
+
+class BlankTxtPanel(ttk.Frame):
+    """병원 폴더를 끌어다 놓으면, 폴더마다 같은 이름의 빈 메모장(.txt)을 그 폴더 옆(같은 위치)에 만듦"""
+
+    def __init__(self, master, app):
+        super().__init__(master, padding=8)
+        self.app = app
+        self.dirs = []
+
+        top = ttk.Frame(self)
+        top.pack(fill="x")
+        ttk.Button(top, text="폴더 추가", command=self._add_folder).pack(side="left")
+        ttk.Button(top, text="선택 삭제", command=self._remove_sel).pack(side="left", padx=3)
+        ttk.Button(top, text="목록 비우기", command=self._clear).pack(side="left")
+        help_label(top, f"병원 폴더들을 {drop_hint()}'폴더 추가'로 넣고 '빈 원고 생성하기'를 누르세요.\n"
+                        "폴더마다 같은 이름의 빈 메모장(.txt)을 그 폴더와 같은 위치에 만듭니다.\n"
+                        "예: 바탕화면\\서울리더스 치아교정  →  바탕화면\\서울리더스 치아교정.txt\n\n"
+                        "이미 같은 이름의 메모장이 있으면 건드리지 않고 건너뜁니다.").pack(side="left", padx=10)
+        self.count_lbl = ttk.Label(top, text="0개")
+        self.count_lbl.pack(side="right")
+
+        lf = ttk.Frame(self)
+        lf.pack(fill="both", expand=True, pady=8)
+        self.tree = ttk.Treeview(lf, columns=("name", "txt", "where"), show="headings", selectmode="extended")
+        for c, t, w in (("name", "폴더", 240), ("txt", "만들 메모장", 260), ("where", "위치", 360)):
+            self.tree.heading(c, text=t)
+            self.tree.column(c, width=w, anchor="w")
+        self.tree.tag_configure("exists", foreground="#999")
+        self.tree.tag_configure("made", foreground="#0a5")
+        sb = ttk.Scrollbar(lf, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        for w in (self.tree, self):
+            enable_drop(w, self._drop)
+
+        bot = ttk.Frame(self)
+        bot.pack(fill="x")
+        self.run_btn = ttk.Button(bot, text="빈 원고 생성하기", style="Big.TButton", command=self._run)
+        self.run_btn.pack(side="left", ipady=4, ipadx=20)
+        self.result = ttk.Label(bot, text="")
+        self.result.pack(side="left", padx=14)
+
+    @staticmethod
+    def _txt_path(d):
+        d = os.path.normpath(d)
+        return os.path.join(os.path.dirname(d), os.path.basename(d) + ".txt")
+
+    def _drop(self, paths):
+        known = set(self.dirs)
+        for p in core.natural_sorted(paths):
+            p = os.path.normpath(p)
+            if not os.path.isdir(p) or p in known:
+                continue
+            known.add(p)
+            self.dirs.append(p)
+            txt = self._txt_path(p)
+            ex = os.path.exists(txt)
+            self.tree.insert("", "end", iid=p, tags=("exists",) if ex else (),
+                             values=(os.path.basename(p), os.path.basename(txt) + ("  (이미 있음)" if ex else ""),
+                                     os.path.dirname(p)))
+        self.count_lbl.config(text=f"{len(self.dirs)}개")
+
+    def _add_folder(self):
+        d = filedialog.askdirectory()
+        if d:
+            self._drop([d])
+
+    def _remove_sel(self):
+        for iid in self.tree.selection():
+            self.tree.delete(iid)
+            if iid in self.dirs:
+                self.dirs.remove(iid)
+        self.count_lbl.config(text=f"{len(self.dirs)}개")
+
+    def _clear(self):
+        self.tree.delete(*self.tree.get_children())
+        self.dirs.clear()
+        self.count_lbl.config(text="0개")
+        self.result.config(text="")
+
+    def _run(self):
+        if not self.dirs:
+            messagebox.showinfo(APP_NAME, "먼저 병원 폴더를 끌어다 놓거나 '폴더 추가'로 넣어주세요.")
+            return
+        made, skipped, errors = 0, 0, []
+        for d in self.dirs:
+            txt = self._txt_path(d)
+            if os.path.exists(txt):
+                skipped += 1
+                continue
+            try:
+                open(txt, "x", encoding="utf-8").close()
+                made += 1
+                self.tree.item(d, tags=("made",),
+                               values=(os.path.basename(d), os.path.basename(txt) + "  (생성됨)", os.path.dirname(d)))
+            except Exception as e:
+                errors.append(f"{os.path.basename(d)}: {e}")
+        self.result.config(text=f"생성 {made}개" + (f" · 이미 있어서 건너뜀 {skipped}개" if skipped else "")
+                                + (f" · 실패 {len(errors)}개" if errors else ""))
+        if errors:
+            messagebox.showwarning(APP_NAME, "일부 메모장을 만들지 못했습니다.\n\n" + "\n".join(errors[:15]))
+
+
+class ImageArea(ttk.Frame):
+    """이미지 가공 탭: [병원 이미지 가공] [빈 원고 생성하기]"""
+
+    def __init__(self, master, app):
+        super().__init__(master)
+        nb = ttk.Notebook(self)
+        nb.pack(fill="both", expand=True, padx=4, pady=4)
+        self.main = ImageTab(nb, app)
+        self.blank = BlankTxtPanel(nb, app)
+        nb.add(self.main, text="  병원 이미지 가공  ")
+        nb.add(self.blank, text="  빈 원고 생성하기  ")
