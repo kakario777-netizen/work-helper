@@ -579,6 +579,7 @@ def main():
                                                 if x["n"]][:14], flush=True)
                     print("rank items", kw, "→", pg.get("title"), len(pg.get("items", [])), "개:",
                           [it["text"][:28] for it in pg.get("items", [])[:6]], flush=True)
+                    print("rank hrefs", kw, [it["hrefs"][:2] for it in pg.get("items", [])[:4]], flush=True)
                     rk, how = ck.find(link)
                     shp = ck.shot(rk, os.path.join(tmp, "shots", kw + ".jpg"))
                     print("rank result", kw, rk, how, "shot", shp and os.path.getsize(shp), f"{_t.time() - t0:.1f}s", flush=True)

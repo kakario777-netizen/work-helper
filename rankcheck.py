@@ -11,7 +11,7 @@ import urllib.request
 import extractor
 
 SEARCH = "https://search.naver.com/search.naver?where=nexearch&sm=top_hty&fbm=0&ie=utf8&query={q}"
-EXCLUDE = r"광고|클립|브랜드\s*콘텐츠|함께\s*많이\s*찾|연관|이미지|동영상|뉴스|쇼핑|지식\s*iN|플레이스|인플루언서|지도|함께\s*보면|관련\s*검색|추천|숏폼|오픈사전|어학|사전|웹툰|도서"
+EXCLUDE = r"AI\s*브리핑|함께\s*찾는|질병|광고|클립|브랜드\s*콘텐츠|함께\s*많이\s*찾|연관|이미지|동영상|뉴스|쇼핑|지식\s*iN|플레이스|인플루언서|지도|함께\s*보면|관련\s*검색|추천|숏폼|오픈사전|어학|사전|웹툰|도서"
 
 
 # ───────────────────── 내 링크 알아보기 ─────────────────────
@@ -135,35 +135,58 @@ ANALYZE_JS = r"""
   const root = document.querySelector('#main_pack') || document.body;
   let secs = Array.from(root.children);
   for (const s of root.querySelectorAll('section, .api_subject_bx, [class*="sc_new"]')) if (!secs.includes(s)) secs.push(s);
-  const titleOf = (sec) => {
-    const h = sec.querySelector('h2, h3, [class*="title_area"], [class*="headline"], [class*="api_title"], [class*="header"] strong');
-    return ((h && h.innerText) || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  const realHrefs = (a) => {
+    const out = [];
+    const push = (h) => {
+      if (!h) return;
+      try {
+        const u = new URL(h, location.href);
+        for (const k of ['u', 'url', 'rurl', 'cru', 'link']) {
+          const v = u.searchParams.get(k);
+          if (v) { const d = decodeURIComponent(v); if (/^https?:/.test(d)) out.push(d); }
+        }
+        out.push(u.href);
+      } catch (e) {}
+    };
+    push(a.getAttribute('href')); push(a.getAttribute('data-url')); push(a.getAttribute('cru'));
+    push(a.getAttribute('data-cru')); push(a.getAttribute('data-link'));
+    return out;
   };
-  const okLink = (h) => /^https?:/.test(h) && !/search\.naver\.com|help\.naver|keep\.naver|nid\.naver|ader\.naver|adcr\.naver|\/\/ad\.|\.ad\.naver|terms\.naver|notice\.naver|talk\.naver|nv\.naver/.test(h);
+  const okLink = (h) => /^https?:/.test(h) && !/search\.naver\.com|help\.naver|keep\.naver|nid\.naver|ader\.naver|adcr\.naver|\/\/ad\.|\.ad\.naver|terms\.naver|notice\.naver|talk\.naver|nv\.naver|cr\.naver|\/\/n\.news|map\.naver|tv\.naver/.test(h);
+  const goodHrefs = (a) => realHrefs(a).filter(okLink);
   const itemOf = (a, sec) => {
     let n = a;
-    while (n && n !== sec && n.parentElement && n.parentElement !== sec.parentElement) {
+    while (n && n !== sec && n.parentElement) {
       const p = n.parentElement;
       const same = Array.from(p.children).filter(c => c.tagName === n.tagName && c.className === n.className);
       if (same.length >= 3 && n.tagName !== 'A' && n.tagName !== 'SPAN') return n;
+      if (p === sec) break;
       n = p;
     }
     return null;
   };
+  const titleOf = (sec, items) => {
+    for (const h of sec.querySelectorAll('h2, h3, [class*="title_area"], [class*="headline"], [class*="api_title"], [class*="header"] strong')) {
+      if (items.some(it => it.contains(h))) continue;
+      const t = (h.innerText || '').replace(/\s+/g, ' ').trim();
+      if (t) return t.slice(0, 40);
+    }
+    return '';
+  };
   const summary = [];
   let best = null;
   secs.forEach((sec, si) => {
-    const title = titleOf(sec);
     const items = [], seen = new Set();
     for (const a of sec.querySelectorAll('a[href]')) {
-      if (!okLink(a.href)) continue;
+      if (!goodHrefs(a).length) continue;
       const it = itemOf(a, sec);
       if (!it || seen.has(it)) continue;
       seen.add(it); items.push(it);
     }
+    const title = titleOf(sec, items);
     const hasAdMark = Array.from(sec.querySelectorAll('i, span, em')).slice(0, 80).some(e => e.innerText && e.innerText.trim() === '광고');
     const excluded = EXCL.test(title) || (hasAdMark && items.length < 8);
-    const web = items.filter(it => Array.from(it.querySelectorAll('a[href]')).some(a => /blog\.naver|cafe\.naver|^https?:\/\/(?!.*naver\.com)/.test(a.href))).length;
+    const web = items.filter(it => Array.from(it.querySelectorAll('a[href]')).some(a => goodHrefs(a).some(h => /blog\.naver|cafe\.naver|^https?:\/\/(?!.*naver\.com)/.test(h)))).length;
     summary.push({si, title, n: items.length, web, excluded});
     if (!excluded && web >= 3 && (!best || web > best.web)) best = {sec, items, title, web, si};
   });
@@ -172,7 +195,7 @@ ANALYZE_JS = r"""
   const r0 = best.sec.getBoundingClientRect();
   window.__wh_sec = best.sec;
   const items = best.items.map((it, i) => ({
-    hrefs: Array.from(new Set(Array.from(it.querySelectorAll('a[href]')).map(a => a.href))).slice(0, 12),
+    hrefs: Array.from(new Set(Array.from(it.querySelectorAll('a[href]')).flatMap(goodHrefs))).slice(0, 16),
     text: (it.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300)
   }));
   return {captcha: false, sections: summary, items, title: best.title, si: best.si,
