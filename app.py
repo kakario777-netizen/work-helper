@@ -553,6 +553,39 @@ def main():
             bks = os.listdir(os.path.join(tmp, "원고 수정 원본"))
             print("place:", after.replace("\r\n", " / "), flush=True)
             print("place backup:", bks, open(os.path.join(tmp, "원고 수정 원본", bks[0]), "rb").read().decode() == orig, flush=True)
+            # 순위 체크: 표 붙여넣기 + 실제 네이버 검색
+            rp = app.text_tab.rank
+            app.root.clipboard_clear()
+            app.root.clipboard_append("1\t거제치과\thttps://blog.naver.com/jannypooh/224464524715\t\t서울연세탑\n"
+                                      "2\t서면스마일라식\thttps://naver.me/GuCJYWB2\t\t밝은눈\n"
+                                      "3\t하지정맥류원인\thttps://cafe.naver.com/cantsb/3692588\t\t에스메디\n")
+            rp.data = []
+            rp.paste()
+            from tab_rank import col_letter
+            print("rank paste:", rp.ncols, "칸, 순위 칸 =", col_letter(rp.rank_col()), flush=True)
+            import rankcheck, time as _t
+            print("naver.me →", rankcheck.resolve("https://naver.me/GuCJYWB2"), flush=True)
+            try:
+                ck = rankcheck.Checker(os.path.join(tmp, "browser"))
+                for kw, link in (("거제치과", "https://blog.naver.com/jannypooh/224464524715"),
+                                 ("서면스마일라식", "https://naver.me/GuCJYWB2"),
+                                 ("하지정맥류원인", "https://cafe.naver.com/cantsb/3692588")):
+                    t0 = _t.time()
+                    pg = ck.search(kw)
+                    if pg.get("captcha"):
+                        print("rank", kw, "CAPTCHA", flush=True)
+                        continue
+                    print("rank sections", kw, [(x["title"], x["n"], x["web"], x["excluded"]) for x in pg.get("sections", [])
+                                                if x["n"]][:14], flush=True)
+                    print("rank items", kw, "→", pg.get("title"), len(pg.get("items", [])), "개:",
+                          [it["text"][:28] for it in pg.get("items", [])[:6]], flush=True)
+                    rk, how = ck.find(link)
+                    shp = ck.shot(rk, os.path.join(tmp, "shots", kw + ".jpg"))
+                    print("rank result", kw, rk, how, "shot", shp and os.path.getsize(shp), f"{_t.time() - t0:.1f}s", flush=True)
+                ck.close()
+            except Exception as e:
+                import traceback
+                print("rank live fail:", e, traceback.format_exc()[-600:], flush=True)
             import extractor
             for u in ("https://blog.naver.com/aaipfteejc4n/224463697294",
                       "https://blog.naver.com/y9tfzmtbzxz/224463718647"):
