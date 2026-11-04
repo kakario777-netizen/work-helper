@@ -71,7 +71,8 @@ class RankPanel(ttk.Frame):
                         "  · 자동: 오른쪽에서 두 번째 칸이 비어 있으면 그 칸, 아니면 링크 오른쪽 첫 빈 칸\n"
                         "순위는 광고·클립·브랜드 콘텐츠·함께 많이 찾는·이미지 같은 주제 칸은 빼고,\n"
                         "블로그·카페·웹사이트가 모인 일반 결과 칸에서 위에서 몇 번째인지 셉니다.\n"
-                        "카페 글은 링크로 먼저 찾고, 안 되면 제목으로 한 번 더 확인합니다. 못 찾으면 '-'.\n\n"
+                        "카페 글은 링크로 먼저 찾고, 안 되면 제목으로 한 번 더 확인합니다. 못 찾으면 '-'.\n"
+                        "링크가 같은 글은 없어도 병원명 칸의 병원 글이 있으면 '동일 병원글 ○위'로 알려주고 🔍 캡쳐도 남깁니다.\n\n"
                         "🔍 에 마우스를 올리면 찾은 글에 빨간 테두리를 친 캡쳐가 뜹니다. (2주 뒤 자동 삭제)\n"
                         "표를 긁어 Ctrl+C (또는 '표 전체 복사') 하면 엑셀에 그대로 붙습니다.\n"
                         "네이버가 보안문자를 띄우면 멈춥니다. '검색 창 보이기'를 켜고 직접 풀어준 뒤 다시 시작하세요.").pack(side="left", padx=10)
@@ -93,6 +94,7 @@ class RankPanel(ttk.Frame):
         tf.columnconfigure(0, weight=1)
         self.tree.tag_configure("found", background="#eaf7ea")
         self.tree.tag_configure("miss", background="#fff4e5")
+        self.tree.tag_configure("near", background="#fffbd0")
         self.tree.tag_configure("work", background="#e8f0ff")
         self.tree.tag_configure("err", background="#ffe3e3")
         for w in (self.tree, self):
@@ -121,6 +123,13 @@ class RankPanel(ttk.Frame):
             if n > best:
                 best, bi = n, c
         return bi if best > 0 else None
+
+    def _hosp_col(self, lc, rc):
+        """링크 오른쪽에서 순위 칸이 아닌, 글자가 들어 있는 첫 칸 = 병원명"""
+        for c in range(lc + 1, self.ncols):
+            if c != rc and any(r[c].strip() and not r[c].strip().isdigit() for r in self.data):
+                return c
+        return None
 
     def _empty(self, c):
         return all(not r[c].strip() for r in self.data)
@@ -299,8 +308,10 @@ class RankPanel(ttk.Frame):
         kc = lc - 1
         sel = self.tree.selection()
         rows = [int(i) for i in sel] if len(sel) > 1 else list(range(len(self.data)))
-        jobs = [(ri, self.data[ri][kc].strip(), self.data[ri][lc].strip()) for ri in rows
-                if self.data[ri][kc].strip() and self.data[ri][lc].strip()]
+        hc = self._hosp_col(lc, rc)
+        jobs = [(ri, self.data[ri][kc].strip(), self.data[ri][lc].strip(),
+                 self.data[ri][hc].strip() if hc is not None and hc < len(self.data[ri]) else "")
+                for ri in rows if self.data[ri][kc].strip() and self.data[ri][lc].strip()]
         if not jobs:
             messagebox.showinfo(APP_NAME, "키워드와 링크가 모두 있는 줄이 없습니다.")
             return
@@ -311,11 +322,11 @@ class RankPanel(ttk.Frame):
             a, b = 2.0, 4.0
         # 같은 키워드는 한 번만 검색
         order, by_kw = [], {}
-        for ri, kw, link in jobs:
+        for ri, kw, link, hosp in jobs:
             if kw not in by_kw:
                 by_kw[kw] = []
                 order.append(kw)
-            by_kw[kw].append((ri, link))
+            by_kw[kw].append((ri, link, hosp))
         self.stop_flag.clear()
         self.prog.config(maximum=len(jobs), value=0)
         self.run_btn.config(state="disabled")
@@ -332,28 +343,34 @@ class RankPanel(ttk.Frame):
                 for ki, kw in enumerate(order):
                     if self.stop_flag.is_set():
                         break
-                    for ri, _ in by_kw[kw]:
+                    for ri, _, _ in by_kw[kw]:
                         self.q.put(("row", ri, None, f"'{kw}' 검색 중...", "work", None))
                     page = ck.search(kw)
                     if page.get("captcha"):
-                        for ri, _ in by_kw[kw]:
+                        for ri, _, _ in by_kw[kw]:
                             self.q.put(("row", ri, None, "네이버 보안문자 — 멈춤", "err", None))
                         self.q.put(("captcha",))
                         break
                     total = len(page.get("items", []))
                     parts = page.get("parts") or []
                     sec = ("위아래 " + "+".join(map(str, parts)) + "개 합침") if len(parts) > 1 else ""
-                    for ri, link in by_kw[kw]:
+                    for ri, link, hosp in by_kw[kw]:
                         try:
                             rank, how = ck.find(link)
                         except Exception as e:
                             rank, how = None, f"오류: {e}"
                         h = hashlib.md5(f"{kw}|{link}|{stamp}".encode()).hexdigest()[:10]
-                        shot = ck.shot(rank, os.path.join(shots_dir(), f"{stamp}_{h}.jpg"))
+                        shot_path = os.path.join(shots_dir(), f"{stamp}_{h}.jpg")
+                        near, near_n = (None, 0) if rank else ck.find_hospital(hosp)
+                        shot = ck.shot(rank or near, shot_path)
                         if rank:
                             found += 1
                             msg = f"{rank}위 / {total}개 ({how})" + (f" · {sec}" if sec else "")
                             self.q.put(("row", ri, str(rank), msg, "found", shot))
+                        elif near:
+                            msg = (f"링크 못 찾음 · 동일 병원글 {near}위" + (f" (외 {near_n - 1}개)" if near_n > 1 else "")
+                                   + f" / {total}개" + (f" · {sec}" if sec else ""))
+                            self.q.put(("row", ri, "-", msg, "near", shot))
                         else:
                             msg = (f"못 찾음 ({total}개 중" + (f", {sec}" if sec else "") + ")") if total else "일반 결과 칸을 못 찾음"
                             self.q.put(("row", ri, "-", msg, "miss", shot))

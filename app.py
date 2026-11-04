@@ -581,6 +581,7 @@ def main():
                           [it["text"][:28] for it in pg.get("items", [])[:6]], flush=True)
                     print("rank hrefs", kw, [it["hrefs"][:2] for it in pg.get("items", [])[:4]], flush=True)
                     rk, how = ck.find(link)
+                    print("rank same hospital", kw, ck.find_hospital({"거제치과": "서울연세탑", "서면스마일라식": "밝은눈", "하지정맥류원인": "에스메디"}[kw]), flush=True)
                     shp = ck.shot(rk, os.path.join(tmp, "shots", kw + ".jpg"))
                     print("rank result", kw, rk, how, "shot", shp and os.path.getsize(shp), f"{_t.time() - t0:.1f}s", flush=True)
                 ck.close()

@@ -267,6 +267,15 @@ class Checker:
                 return i + 1, how
         return None, ""
 
+    def find_hospital(self, name):
+        """링크가 같은 글이 없을 때: 글 내용(제목·블로그명 등)에 병원명이 들어간 글 순위.
+        반환: (첫 순위 or None, 같은 병원 글 수)"""
+        key = _norm_text(name)
+        if len(key) < 2:
+            return None, 0
+        ranks = [i + 1 for i, it in enumerate((self.page or {}).get("items", [])) if key in _norm_text(it.get("text"))]
+        return (ranks[0] if ranks else None), len(ranks)
+
     def shot(self, rank, path):
         """찾은 글에 빨간 테두리를 그려 그 부분을 가볍게 캡쳐 (못 찾으면 일반 결과 칸 위쪽)"""
         try:
