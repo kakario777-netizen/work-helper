@@ -193,13 +193,15 @@ ANALYZE_JS = r"""
   // 클린 칸이 중간 주제 칸 때문에 위아래로 쪼개져 있으므로, 위에서부터 클린 칸을 차례로 이어 붙여 20개 안팎까지
   const before = (a, b) => (a.compareDocumentPosition(b) & 4) ? -1 : 1;
   const exSecs = all.filter(x => x.excluded).map(x => x.sec);
-  const cands = all.filter(x => !x.excluded && x.web >= 2).sort((a, b) => before(a.sec, b.sec));
+  // 주제 칸(AI 브리핑 등) 안에 들어 있는 칸은 클린 칸이 아님
+  const cands = all.filter(x => !x.excluded && x.web >= 2 && !exSecs.some(e => e !== x.sec && e.contains(x.sec)))
+                   .sort((a, b) => before(a.sec, b.sec));
   const picked = [], seenIt = new Set(), parts = [];
   for (const c of cands) {
     let added = 0;
     for (const it of c.items) {
       if (seenIt.has(it)) continue;
-      if (exSecs.some(e => e !== c.sec && e.contains(it) && !e.contains(c.sec))) continue;   // 주제 칸 안의 글은 뺌
+      if (exSecs.some(e => e !== c.sec && e.contains(it))) continue;   // 주제 칸 안의 글은 뺌
       seenIt.add(it); picked.push(it); added++;
     }
     if (added) parts.push(added);
