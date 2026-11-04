@@ -5,6 +5,7 @@ from tkinter import ttk, filedialog
 
 import core
 from tab_extract import ExtractPanel
+from tab_place import PlacePanel
 from common import (GRAY, FONT_B, text_box, copy_to_clipboard, enable_drop, drop_hint, read_text_file, Paned, help_label)
 
 
@@ -22,6 +23,7 @@ class TextTab(ttk.Frame):
             "report": (self._build_rank(nb), "보고서 정리"),
             "nate": (self._build_nate(nb), "네이트온 보고서 정리"),
             "extract": (self._build_extract(nb), "링크로 원고 추출"),
+            "place": (self._build_place(nb), "원고 이미지 배치"),
             "wrap": (self._build_wrap(nb), "줄바꿈 정리"),
         }
         self.apply_layout(app.settings.get("sub_order"), app.settings.get("sub_hidden"))
@@ -35,6 +37,10 @@ class TextTab(ttk.Frame):
         for k in shown:
             w, name = self.subs[k]
             self.nb.add(w, text=f"  {name}  ")
+
+    def _build_place(self, nb):
+        self.place = PlacePanel(nb, self.app)
+        return self.place
 
     def _build_extract(self, nb):
         self.extract = ExtractPanel(nb, self.app)

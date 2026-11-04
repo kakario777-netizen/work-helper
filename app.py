@@ -496,6 +496,36 @@ def main():
             bl._drop([os.path.join(tmp, "blank", n) for n in os.listdir(os.path.join(tmp, "blank"))])
             bl._run()
             print("blank txt:", sorted(os.listdir(os.path.join(tmp, "blank"))), bl.result.cget("text"), flush=True)
+            # 원고 이미지 배치
+            pl = app.text_tab.place
+            mdir = os.path.join(tmp, "원고")
+            os.makedirs(mdir)
+            orig = "서울역피부과 레이저 안내\r\n\r\n안녕하세요\r\n\r\n문단1 줄1\r\n문단1 줄2\r\n\r\n문단2\r\n\r\n문단3\r\n\r\n#태그\r\n"
+            mp = os.path.join(mdir, "서울역 원고.txt")
+            open(mp, "w", encoding="utf-8", newline="").write(orig)
+            pl._drop([mdir])
+            pl._fill_groups()
+            gname = [k for k, v in pl._groups.items() if v == cap.sel[0]][0]
+            pl._cur_group = cap.sel[0]
+            pl.sample.delete("1.0", "end")
+            pl.sample.insert("1.0", "제목\n\n[사진 1]\n\n문단\n\n[사진 2]\n\n#태그")
+            pl._save_sample()
+            pl.tree.selection_set(mp)
+            pl.grp.set(gname)
+            pl._group_picked()
+            pl.cnt.set(3)
+            pl._apply_sel()
+            import tkinter.messagebox as _mb
+            _old = (_mb.askyesno, _mb.askyesnocancel)
+            _mb.askyesno = lambda *a, **k: True
+            _mb.askyesnocancel = lambda *a, **k: False
+            pl._backup_dir = lambda: os.path.join(tmp, "원고 수정 원본")
+            pl._run()
+            _mb.askyesno, _mb.askyesnocancel = _old
+            after = open(mp, "rb").read().decode("utf-8")
+            bks = os.listdir(os.path.join(tmp, "원고 수정 원본"))
+            print("place:", after.replace("\r\n", " / "), flush=True)
+            print("place backup:", bks, open(os.path.join(tmp, "원고 수정 원본", bks[0]), "rb").read().decode() == orig, flush=True)
             import extractor
             for u in ("https://blog.naver.com/aaipfteejc4n/224463697294",
                       "https://blog.naver.com/y9tfzmtbzxz/224463718647"):
