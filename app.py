@@ -496,6 +496,22 @@ def main():
             bl._drop([os.path.join(tmp, "blank", n) for n in os.listdir(os.path.join(tmp, "blank"))])
             bl._run()
             print("blank txt:", sorted(os.listdir(os.path.join(tmp, "blank"))), bl.result.cget("text"), flush=True)
+            import extractor
+            for u in ("https://blog.naver.com/aaipfteejc4n/224463697294",
+                      "https://blog.naver.com/y9tfzmtbzxz/224463718647"):
+                try:
+                    t_, b_ = extractor.extract(u)
+                    print("extract:", u.rsplit("/", 1)[-1], "|", t_, "|", len("".join(b_.split())), "자 |",
+                          b_[:120].replace("\n", " / "), flush=True)
+                except Exception as e:
+                    print("extract fail:", u, e, flush=True)
+            from tab_extract import BulkDialog
+            bd = BulkDialog(app.text_tab.extract)
+            bd.rows[0][1].set("일산백옥주사")
+            bd.rows[0][2].insert("1.0", "https://blog.naver.com/aaipfteejc4n/224463697294\nhttps://blog.naver.com/aaipfteejc4n/224463701057")
+            bd._save()
+            print("bulk saved:", app.settings.get("ex_bulk"), flush=True)
+            bd.destroy()
             print("frozen:", updater.is_frozen(), flush=True)
             print("selftest ok", flush=True)
         root.after(800, test)

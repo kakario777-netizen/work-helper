@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 
 import core
+from tab_extract import ExtractPanel
 from common import (GRAY, FONT_B, text_box, copy_to_clipboard, enable_drop, drop_hint, read_text_file, Paned, help_label)
 
 
@@ -20,6 +21,7 @@ class TextTab(ttk.Frame):
             "check": (self.check, "원고 검사"),
             "report": (self._build_rank(nb), "보고서 정리"),
             "nate": (self._build_nate(nb), "네이트온 보고서 정리"),
+            "extract": (self._build_extract(nb), "링크로 원고 추출"),
             "wrap": (self._build_wrap(nb), "줄바꿈 정리"),
         }
         self.apply_layout(app.settings.get("sub_order"), app.settings.get("sub_hidden"))
@@ -33,6 +35,10 @@ class TextTab(ttk.Frame):
         for k in shown:
             w, name = self.subs[k]
             self.nb.add(w, text=f"  {name}  ")
+
+    def _build_extract(self, nb):
+        self.extract = ExtractPanel(nb, self.app)
+        return self.extract
 
     # ── 네이트온 보고서 정리 (링크·키워드 → 키워드<탭>링크) ──
     def _build_nate(self, nb):
@@ -157,6 +163,10 @@ class TextTab(ttk.Frame):
         self.wrap_info.config(text=f"결과  공백 제외 {s['no_space']:,}자 · 문단 {s['paragraphs']}개")
 
     def remember(self):
+        try:
+            self.extract.remember()
+        except Exception:
+            pass
         try:
             self.app.settings["wrap_width"] = int(self.wrap_w.get())
             self.app.settings["wrap_first"] = self.wrap_first.get()
