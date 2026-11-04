@@ -577,7 +577,7 @@ def main():
                         continue
                     print("rank sections", kw, [(x["title"], x["n"], x["web"], x["excluded"]) for x in pg.get("sections", [])
                                                 if x["n"]][:14], flush=True)
-                    print("rank items", kw, "→", pg.get("title"), len(pg.get("items", [])), "개:",
+                    print("rank items", kw, "→ parts", pg.get("parts"), len(pg.get("items", [])), "개:",
                           [it["text"][:28] for it in pg.get("items", [])[:6]], flush=True)
                     print("rank hrefs", kw, [it["hrefs"][:2] for it in pg.get("items", [])[:4]], flush=True)
                     rk, how = ck.find(link)

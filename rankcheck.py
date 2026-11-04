@@ -174,7 +174,7 @@ ANALYZE_JS = r"""
     return '';
   };
   const summary = [];
-  let best = null;
+  const all = [];
   secs.forEach((sec, si) => {
     const items = [], seen = new Set();
     for (const a of sec.querySelectorAll('a[href]')) {
@@ -188,9 +188,26 @@ ANALYZE_JS = r"""
     const excluded = EXCL.test(title) || (hasAdMark && items.length < 8);
     const web = items.filter(it => Array.from(it.querySelectorAll('a[href]')).some(a => goodHrefs(a).some(h => /blog\.naver|cafe\.naver|^https?:\/\/(?!.*naver\.com)/.test(h)))).length;
     summary.push({si, title, n: items.length, web, excluded});
-    if (!excluded && web >= 3 && (!best || web > best.web)) best = {sec, items, title, web, si};
+    all.push({sec, items, title, web, excluded, si});
   });
-  if (!best) return {captcha: false, sections: summary, items: [], title: ''};
+  // 클린 칸이 중간 주제 칸 때문에 위아래로 쪼개져 있으므로, 위에서부터 클린 칸을 차례로 이어 붙여 20개 안팎까지
+  const before = (a, b) => (a.compareDocumentPosition(b) & 4) ? -1 : 1;
+  const exSecs = all.filter(x => x.excluded).map(x => x.sec);
+  const cands = all.filter(x => !x.excluded && x.web >= 2).sort((a, b) => before(a.sec, b.sec));
+  const picked = [], seenIt = new Set(), parts = [];
+  for (const c of cands) {
+    let added = 0;
+    for (const it of c.items) {
+      if (seenIt.has(it)) continue;
+      if (exSecs.some(e => e !== c.sec && e.contains(it) && !e.contains(c.sec))) continue;   // 주제 칸 안의 글은 뺌
+      seenIt.add(it); picked.push(it); added++;
+    }
+    if (added) parts.push(added);
+    if (picked.length >= 18) break;
+  }
+  picked.sort(before);
+  const best = picked.length ? {sec: cands[0].sec, items: picked, title: '', web: picked.length, si: cands[0].si} : null;
+  if (!best) return {captcha: false, sections: summary, items: [], title: '', parts: []};
   window.__wh_items = best.items;
   const r0 = best.sec.getBoundingClientRect();
   window.__wh_sec = best.sec;
@@ -198,7 +215,7 @@ ANALYZE_JS = r"""
     hrefs: Array.from(new Set(Array.from(it.querySelectorAll('a[href]')).flatMap(goodHrefs))).slice(0, 16),
     text: (it.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300)
   }));
-  return {captcha: false, sections: summary, items, title: best.title, si: best.si,
+  return {captcha: false, sections: summary, items, title: best.title, si: best.si, parts,
           secY: r0.top + window.scrollY, pageW: document.documentElement.scrollWidth};
 })()
 """ % repr(EXCLUDE).replace("'", '"')

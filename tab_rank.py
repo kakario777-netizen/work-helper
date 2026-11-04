@@ -340,8 +340,9 @@ class RankPanel(ttk.Frame):
                             self.q.put(("row", ri, None, "네이버 보안문자 — 멈춤", "err", None))
                         self.q.put(("captcha",))
                         break
-                    sec = page.get("title") or "일반 결과"
                     total = len(page.get("items", []))
+                    parts = page.get("parts") or []
+                    sec = ("위아래 " + "+".join(map(str, parts)) + "개 합침") if len(parts) > 1 else ""
                     for ri, link in by_kw[kw]:
                         try:
                             rank, how = ck.find(link)
@@ -351,10 +352,10 @@ class RankPanel(ttk.Frame):
                         shot = ck.shot(rank, os.path.join(shots_dir(), f"{stamp}_{h}.jpg"))
                         if rank:
                             found += 1
-                            msg = f"{rank}위 / {total}개 ({how})" + (f" · {sec}" if page.get("title") else "")
+                            msg = f"{rank}위 / {total}개 ({how})" + (f" · {sec}" if sec else "")
                             self.q.put(("row", ri, str(rank), msg, "found", shot))
                         else:
-                            msg = f"못 찾음 ({total}개 중)" if total else "일반 결과 칸을 못 찾음"
+                            msg = (f"못 찾음 ({total}개 중" + (f", {sec}" if sec else "") + ")") if total else "일반 결과 칸을 못 찾음"
                             self.q.put(("row", ri, "-", msg, "miss", shot))
                         done += 1
                         self.q.put(("prog", done, found))
