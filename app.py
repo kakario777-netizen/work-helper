@@ -523,6 +523,29 @@ def main():
             bd._close()
             cap.sel = [x for x in cap.sel if x != b] or [g[0] for g in cap.groups if not cap._is_bundle(g[0])][:1]
             cap._sync_selection()
+            # 특수 가공: 워터마크 + GIF
+            import special
+            gsrc = os.path.join(tmp, "sp")
+            os.makedirs(gsrc)
+            frames = [Image.effect_mandelbrot((400, 200), (-2, -1, 1, 1), 20 + k).convert("RGB") for k in range(6)]
+            frames[0].save(os.path.join(gsrc, "b.gif"), save_all=True, append_images=frames[1:], duration=90, loop=0)
+            Image.effect_mandelbrot((900, 700), (-2, -1.5, 1, 1.5), 50).convert("RGB").save(os.path.join(gsrc, "a.jpg"))
+            from tab_library import SpecialDialog
+            sd = SpecialDialog(cap)
+            sd._drop([gsrc])
+            sd.tree.move(os.path.join(gsrc, "b.gif"), "", 0)
+            sd._renumber()
+            sd.out_name.set("특수가공테스트")
+            sd._target = lambda: os.path.join(tmp, "special out")
+            sd._run()
+            sd.worker.join(120)
+            sd._poll()
+            so = os.path.join(tmp, "special out")
+            outs = sorted(os.listdir(so))
+            g = Image.open(os.path.join(so, outs[0]))
+            print("special:", outs, "gif", g.size, g.n_frames, g.info.get("duration"),
+                  "font", special._font_file(special.FONTS[0], "Dr.Kevin"), flush=True)
+            sd._close()
             # 원고 이미지 배치
             pl = app.text_tab.place
             mdir = os.path.join(tmp, "원고")

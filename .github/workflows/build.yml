@@ -29,6 +29,16 @@ jobs:
       - name: 라이브러리 설치
         run: pip install -r requirements.txt nuitka ordered-set zstandard
 
+      - name: 워터마크 무료 폰트 받기 (Montserrat ExtraBold, OFL)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force assets | Out-Null
+          if (!(Test-Path assets\Montserrat-ExtraBold.ttf)) {
+            Invoke-WebRequest -Uri "https://github.com/JulietaUla/Montserrat/raw/master/fonts/ttf/Montserrat-ExtraBold.ttf" -OutFile assets\Montserrat-ExtraBold.ttf
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/JulietaUla/Montserrat/master/OFL.txt" -OutFile assets\Montserrat-OFL.txt
+          }
+          Get-ChildItem assets
+
       - name: 동작 확인 (소스)
         run: python app.py --selftest
         timeout-minutes: 3
@@ -47,6 +57,7 @@ jobs:
             --enable-plugin=tk-inter --windows-console-mode=disable `
             --include-package=tkinterdnd2 `
             --windows-icon-from-ico=icon.ico --include-data-files=icon.ico=icon.ico `
+            --include-data-dir=assets=assets `
             --output-dir=build --output-filename=WorkHelper.exe `
             --company-name=kakario777 --product-name=WorkHelper `
             --file-description="WorkHelper" --copyright=kakario777 `

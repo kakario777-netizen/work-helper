@@ -114,6 +114,9 @@ class LibraryTab(ttk.Frame):
         right = ttk.Frame(body, padding=(10, 0))
         body.add(right, weight=1, minsize=240)
         if self.is_img:
+            ttk.Button(right, text="특수 가공 (워터마크 · GIF)", command=lambda: SpecialDialog(self)).pack(
+                fill="x", pady=(0, 10), ipady=3)
+        if self.is_img:
             gn = ttk.LabelFrame(right, text=" 파일명 ", padding=8)
             gn.pack(fill="x", pady=(0, 10))
             self.name_pat = tk.StringVar(value=s.get("img_name_pat", "{번호}"))
@@ -1202,3 +1205,336 @@ class BundleDialog(tk.Toplevel):
             pass
         if self.winfo_exists():
             self.after(80, self._poll)
+
+
+class SpecialDialog(tk.Toplevel):
+    """특수 가공: 이미지·GIF를 끌어다 놓고 순서 정하기 → 이미지는 기존 가공 + 워터마크, GIF는 크기 조절 + 워터마크(움직임 유지)"""
+
+    def __init__(self, tab):
+        super().__init__(tab.app.root)
+        import special
+        self.sp = special
+        self.tab, self.app = tab, tab.app
+        s = self.app.settings
+        self.title("특수 가공 - 워터마크 · GIF")
+        self.transient(self.app.root)
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = int(sw * 0.8), int(sh * 0.8)
+        self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 3}")
+        self.minsize(900, 560)
+        self.files = []
+        self.q = queue.Queue()
+        self.worker = None
+        self._drag = None
+        self.last_out = None
+
+        body = Paned(self, self.app, "special_main")
+        body.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # ── 왼쪽: 순서 목록 ──
+        left = ttk.Frame(body)
+        body.add(left, weight=1, width=int(w * 0.36), minsize=300)
+        lh = ttk.Frame(left)
+        lh.pack(fill="x")
+        ttk.Label(lh, text="이미지 순서", font=FONT_B).pack(side="left")
+        help_label(lh, f"이미지·GIF 파일이나 폴더를 {drop_hint()}'파일 추가'로 넣으세요.\n"
+                       "줄을 마우스로 끌어 위아래로 옮기면 순서가 바뀝니다. (▲▼ 버튼도 가능)\n"
+                       "이 순서대로 image001, image002 … 로 저장됩니다. (파일명 규칙은 이미지 생성 탭 설정)").pack(side="left", padx=8)
+        bb = ttk.Frame(left)
+        bb.pack(fill="x", pady=4)
+        ttk.Button(bb, text="파일 추가", command=self._add_files).pack(side="left")
+        ttk.Button(bb, text="▲", width=3, command=lambda: self._move(-1)).pack(side="left", padx=(8, 2))
+        ttk.Button(bb, text="▼", width=3, command=lambda: self._move(1)).pack(side="left")
+        ttk.Button(bb, text="이름순", command=self._sort).pack(side="left", padx=6)
+        ttk.Button(bb, text="삭제", command=self._remove).pack(side="left")
+        ttk.Button(bb, text="비우기", command=self._clear).pack(side="left", padx=3)
+        tf = ttk.Frame(left)
+        tf.pack(fill="both", expand=True)
+        self.tree = ttk.Treeview(tf, columns=("no", "name", "kind", "size"), show="headings", selectmode="browse")
+        for cid, t, cw, anc in (("no", "순서", 50, "center"), ("name", "파일", 220, "w"),
+                                ("kind", "종류", 60, "center"), ("size", "크기", 90, "center")):
+            self.tree.heading(cid, text=t)
+            self.tree.column(cid, width=cw, anchor=anc, stretch=cid == "name")
+        sb = ttk.Scrollbar(tf, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.tree.tag_configure("gif", foreground="#7a3cc2")
+        self.tree.bind("<ButtonPress-1>", self._drag_start)
+        self.tree.bind("<B1-Motion>", self._drag_move)
+        self.tree.bind("<ButtonRelease-1>", lambda e: self._drag_end())
+        self.tree.bind("<<TreeviewSelect>>", lambda e: self._preview())
+        for wdg in (self.tree, left):
+            enable_drop(wdg, self._drop)
+
+        # ── 오른쪽: 미리보기 · 설정 ──
+        rsf = ScrollFrame(body)
+        body.add(rsf, weight=2, minsize=420)
+        right = ttk.Frame(rsf.inner, padding=(12, 0, 8, 0))
+        right.pack(fill="both", expand=True)
+        self.prev = Preview(right, height=200)
+        self.prev.pack(fill="x")
+
+        g0 = ttk.LabelFrame(right, text=" 이미지 ", padding=8)
+        g0.pack(fill="x", pady=(10, 0))
+        self.base_on = tk.BooleanVar(value=s.get("sp_base", True))
+        ttk.Checkbutton(g0, text="기존 가공도 적용 (이미지 생성 탭의 가로 크기·테두리·비율·색감)",
+                        variable=self.base_on, command=self._preview_later).pack(anchor="w")
+        self.img_wm = self._wm_frame(g0, "sp_img_wm", special.DEFAULT_IMG_WM)
+
+        g1 = ttk.LabelFrame(right, text=" GIF (움직임·속도 그대로) ", padding=8)
+        g1.pack(fill="x", pady=(10, 0))
+        rr = ttk.Frame(g1)
+        rr.pack(fill="x")
+        ttk.Label(rr, text="크기 조절 (%)").pack(side="left")
+        gr = s.get("sp_gif_range", [103, 108])
+        self.g_lo, self.g_hi = tk.DoubleVar(value=gr[0]), tk.DoubleVar(value=gr[1])
+        ttk.Spinbox(rr, from_=50, to=200, increment=0.5, textvariable=self.g_lo, width=6).pack(side="left", padx=4)
+        ttk.Label(rr, text="~").pack(side="left")
+        ttk.Spinbox(rr, from_=50, to=200, increment=0.5, textvariable=self.g_hi, width=6).pack(side="left", padx=4)
+        help_label(rr, "GIF마다 이 범위 안에서 무작위로 크기를 키우거나 줄입니다.\n"
+                       "100 = 그대로, 105 = 5% 크게, 95 = 5% 작게.\n재생 속도·반복·프레임 수는 그대로 둡니다.").pack(side="left", padx=6)
+        self.gif_wm = self._wm_frame(g1, "sp_gif_wm", special.DEFAULT_GIF_WM)
+
+        g2 = ttk.LabelFrame(right, text=" 저장 ", padding=8)
+        g2.pack(fill="x", pady=(10, 0))
+        ttk.Label(g2, text="폴더 이름").pack(side="left")
+        self.out_name = tk.StringVar(value=s.get("sp_name", "특수가공"))
+        ttk.Entry(g2, textvariable=self.out_name, width=20).pack(side="left", padx=6)
+        self.where = ttk.Label(g2, text="", foreground="#0a5")
+        self.where.pack(side="left", padx=6)
+        self.out_name.trace_add("write", lambda *a: self._where())
+
+        self.run_btn = ttk.Button(right, text="특수 가공 시작", style="Big.TButton", command=self._run)
+        self.run_btn.pack(fill="x", pady=(12, 4), ipady=4)
+        self.prog = ttk.Progressbar(right, mode="determinate")
+        self.prog.pack(fill="x", pady=4)
+        self.result = WrapLabel(right, text="")
+        self.result.pack(fill="x")
+        self.open_btn = ttk.Button(right, text="결과 폴더 열기", state="disabled",
+                                   command=lambda: open_folder(self.last_out))
+        self.open_btn.pack(anchor="w", pady=(6, 0))
+        self._where()
+        self.protocol("WM_DELETE_WINDOW", self._close)
+
+    # ── 워터마크 설정 칸 ──
+    def _wm_frame(self, parent, key, default):
+        sp = self.sp
+        cur = dict(default)
+        cur.update(self.app.settings.get(key, {}))
+        f = ttk.Frame(parent)
+        f.pack(fill="x", pady=(8, 0))
+        v = {"on": tk.BooleanVar(value=cur["on"]), "text": tk.StringVar(value=cur["text"]),
+             "style": tk.StringVar(value=cur["style"]), "size": tk.DoubleVar(value=cur["size"]),
+             "opacity": tk.DoubleVar(value=cur["opacity"]), "angle": tk.DoubleVar(value=cur["angle"]),
+             "color": tk.StringVar(value=cur["color"]), "font": tk.StringVar(value=cur["font"])}
+        ttk.Checkbutton(f, text="워터마크 넣기", variable=v["on"]).grid(row=0, column=0, sticky="w")
+        ttk.Label(f, text="문구").grid(row=0, column=1, sticky="e", padx=(10, 2))
+        ttk.Entry(f, textvariable=v["text"], width=18).grid(row=0, column=2, sticky="w")
+        ttk.Label(f, text="위치").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Combobox(f, textvariable=v["style"], values=sp.WM_STYLES, state="readonly", width=14).grid(row=1, column=1, columnspan=2, sticky="w")
+        ttk.Label(f, text="크기 (가로 대비 %)").grid(row=2, column=0, sticky="w")
+        ttk.Spinbox(f, from_=2, to=90, increment=1, textvariable=v["size"], width=6).grid(row=2, column=1, sticky="w")
+        ttk.Label(f, text="진하기 (%)").grid(row=2, column=2, sticky="w")
+        ttk.Spinbox(f, from_=1, to=100, increment=1, textvariable=v["opacity"], width=6).grid(row=2, column=3, sticky="w")
+        ttk.Label(f, text="기울기 (도)").grid(row=3, column=0, sticky="w", pady=3)
+        ttk.Spinbox(f, from_=-90, to=90, increment=5, textvariable=v["angle"], width=6).grid(row=3, column=1, sticky="w")
+        ttk.Label(f, text="색").grid(row=3, column=2, sticky="w")
+        ttk.Combobox(f, textvariable=v["color"], values=list(sp.COLORS), state="readonly", width=6).grid(row=3, column=3, sticky="w")
+        ttk.Label(f, text="글꼴").grid(row=4, column=0, sticky="w")
+        ttk.Combobox(f, textvariable=v["font"], values=sp.FONTS, state="readonly", width=24).grid(row=4, column=1, columnspan=3, sticky="w")
+        help_label(f, "위치: 대각선 2개(기울여서 위·아래 두 곳) / 위쪽 모서리 2개 / 네 모서리 / 가운데 / 바둑판 반복\n"
+                      "크기: 글자 한 덩이 폭이 이미지 가로의 몇 % 인지\n진하기: 낮을수록 흐릿 (예: 이미지 10%, GIF 75%)\n"
+                      "기울기는 대각선·가운데·바둑판에만 적용됩니다. 한글 문구는 맑은 고딕으로 씁니다.").grid(
+            row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        for var in v.values():
+            var.trace_add("write", lambda *a: self._preview_later())
+        return v
+
+    def _wm_get(self, v, key):
+        o = {}
+        for k, var in v.items():
+            try:
+                o[k] = var.get()
+            except Exception:
+                o[k] = self.sp.DEFAULT_IMG_WM.get(k)
+        self.app.settings[key] = o
+        return o
+
+    # ── 목록 ──
+    def _drop(self, paths):
+        out = []
+        for p in paths:
+            out += core.list_images(p) if os.path.isdir(p) else [p]
+        for p in out:
+            p = os.path.normpath(p)
+            if p in self.files or os.path.splitext(p)[1].lower() not in core.IMAGE_EXT:
+                continue
+            self.files.append(p)
+        self._refill()
+
+    def _add_files(self):
+        self._drop(filedialog.askopenfilenames(parent=self, filetypes=[("이미지·GIF", "*.jpg *.jpeg *.png *.webp *.bmp *.gif"),
+                                                                       ("모든 파일", "*.*")]))
+
+    def _refill(self, select=None):
+        self.tree.delete(*self.tree.get_children())
+        for i, p in enumerate(self.files):
+            gif = self.sp.is_gif(p)
+            try:
+                from PIL import Image
+                with Image.open(p) as im:
+                    sz = f"{im.size[0]}×{im.size[1]}"
+            except Exception:
+                sz = "?"
+            self.tree.insert("", "end", iid=p, values=(i + 1, os.path.basename(p), "GIF" if gif else "이미지", sz),
+                             tags=("gif",) if gif else ())
+        if select and self.tree.exists(select):
+            self.tree.selection_set(select)
+        elif self.files and not self.tree.selection():
+            self.tree.selection_set(self.files[0])
+
+    def _renumber(self):
+        self.files = list(self.tree.get_children())
+        for i, iid in enumerate(self.files):
+            v = list(self.tree.item(iid, "values"))
+            v[0] = i + 1
+            self.tree.item(iid, values=v)
+
+    def _move(self, d):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        i = self.tree.index(sel[0]) + d
+        if 0 <= i < len(self.files):
+            self.tree.move(sel[0], "", i)
+            self._renumber()
+
+    def _drag_start(self, e):
+        self._drag = self.tree.identify_row(e.y) or None
+
+    def _drag_move(self, e):
+        if not self._drag:
+            return
+        tgt = self.tree.identify_row(e.y)
+        if tgt and tgt != self._drag:
+            self.tree.move(self._drag, "", self.tree.index(tgt))
+            self.tree.config(cursor="sb_v_double_arrow")
+
+    def _drag_end(self):
+        if self._drag:
+            self.tree.config(cursor="")
+            self._renumber()
+        self._drag = None
+
+    def _sort(self):
+        self.files = core.natural_sorted(self.files)
+        self._refill()
+
+    def _remove(self):
+        for iid in self.tree.selection():
+            if iid in self.files:
+                self.files.remove(iid)
+        self._refill()
+
+    def _clear(self):
+        self.files = []
+        self._refill()
+
+    # ── 미리보기 ──
+    def _preview_later(self):
+        if getattr(self, "_pv", None):
+            self.after_cancel(self._pv)
+        self._pv = self.after(300, self._preview)
+
+    def _preview(self):
+        self._pv = None
+        sel = self.tree.selection()
+        if not sel:
+            self.prev.show(None, None)
+            return
+        p = sel[0]
+        gif = self.sp.is_gif(p)
+        wm = self._wm_get(self.gif_wm if gif else self.img_wm, "sp_gif_wm" if gif else "sp_img_wm")
+        base_kw = self.tab._params() if (self.base_on.get() and not gif) else None
+        sp = self.sp
+
+        def proc(im, sc):
+            if base_kw:
+                im = core.preview_process(im, sc, **base_kw)
+            return sp.watermark(im, wm).convert("RGB")
+        self.prev.show(p, proc, self.files)
+
+    # ── 실행 ──
+    def _target(self):
+        base = self.tab._safe(self.out_name.get().strip() or "특수가공")
+        return core.next_numbered_dir(known_folder("desktop"), base)
+
+    def _where(self):
+        self.where.config(text=f"바탕화면\\{os.path.basename(self._target())}\\")
+
+    def _close(self):
+        try:
+            self._wm_get(self.img_wm, "sp_img_wm")
+            self._wm_get(self.gif_wm, "sp_gif_wm")
+            self.app.settings.update(sp_base=self.base_on.get(), sp_name=self.out_name.get(),
+                                     sp_gif_range=[float(self.g_lo.get()), float(self.g_hi.get())])
+        except Exception:
+            pass
+        self.destroy()
+
+    def _run(self):
+        if self.worker and self.worker.is_alive():
+            return
+        if not self.files:
+            messagebox.showinfo(APP_NAME, "이미지나 GIF를 먼저 넣어주세요.", parent=self)
+            return
+        try:
+            gr = (float(self.g_lo.get()), float(self.g_hi.get()))
+        except Exception:
+            messagebox.showwarning(APP_NAME, "GIF 크기 조절 숫자를 확인해주세요.", parent=self)
+            return
+        img_wm = self._wm_get(self.img_wm, "sp_img_wm")
+        gif_wm = self._wm_get(self.gif_wm, "sp_gif_wm")
+        kw = self.tab._params() if self.base_on.get() else {"width": None, "trim": 0, "aspect": 0, "base": {}}
+        nk = self.tab._name_kw()
+        items = list(self.tree.get_children())
+        out = self.last_out = self._target()
+        self.app.settings.update(sp_base=self.base_on.get(), sp_name=self.out_name.get(), sp_gif_range=list(gr))
+        self.prog.config(maximum=len(items), value=0)
+        self.run_btn.config(state="disabled")
+        self.result.config(text="가공 중... (GIF는 프레임이 많으면 시간이 조금 걸립니다)")
+        sp = self.sp
+
+        def work():
+            try:
+                saved = sp.run(items, out, kw, img_wm, gif_wm, gr, nk.get("name_pattern", "{번호}"),
+                               nk.get("digits", 1), progress=lambda i: self.q.put(("prog", i)))
+                self.q.put(("done", len(saved), None))
+            except Exception as e:
+                self.q.put(("done", 0, str(e)))
+
+        self.worker = threading.Thread(target=work, daemon=True)
+        self.worker.start()
+        self._poll()
+
+    def _poll(self):
+        try:
+            while True:
+                m = self.q.get_nowait()
+                if m[0] == "prog":
+                    self.prog["value"] = m[1]
+                else:
+                    self.run_btn.config(state="normal")
+                    self.result.config(text=f"완료: 바탕화면\\{os.path.basename(self.last_out)}\\ 에 {m[1]}개"
+                                            + (f"\n오류: {m[2]}" if m[2] else ""))
+                    if m[1]:
+                        self.open_btn.config(state="normal")
+                    self._where()
+                    if m[2]:
+                        messagebox.showerror(APP_NAME, f"가공 중 문제가 생겼습니다.\n{m[2]}", parent=self)
+                    return
+        except queue.Empty:
+            pass
+        if self.winfo_exists():
+            self.after(100, self._poll)
