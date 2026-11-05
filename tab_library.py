@@ -477,9 +477,10 @@ class LibraryTab(ttk.Frame):
         files = [os.path.join(d, n) for n in order if os.path.exists(os.path.join(d, n))]
         return files + [f for f in core.list_images(d) if os.path.basename(f) not in order]
 
-    def _make_files(self, d, files, out, rng, kw, tick):
-        """일반 칸: 기존 가공, 특수 칸: 저장된 워터마크·GIF 설정으로 특수 가공"""
-        nk = self._name_kw()
+    def _make_files(self, d, files, out, rng, kw, tick, nk=None):
+        """일반 칸: 기존 가공, 특수 칸: 저장된 워터마크·GIF 설정으로 특수 가공
+        (작업 스레드에서 부르므로 화면 값은 nk 로 미리 받아 옴)"""
+        nk = nk if nk is not None else self._name_kw()
         if self._is_special(d):
             import special
             m = self._meta_raw(d).get("sp", {})
@@ -751,6 +752,7 @@ class LibraryTab(ttk.Frame):
             return
         vary = self.vary.get()
         fresh = self._fresh_factory(kw)
+        nk = self._name_kw()
 
         desktop = known_folder("desktop")
         total = sum(len(f) * count for d, f in jobs) if self.is_img else count * len(jobs)
@@ -772,7 +774,7 @@ class LibraryTab(ttk.Frame):
                         for _ in range(count):
                             top = core.next_numbered_dir(desktop, self._out_base(d))
                             out = os.path.join(top, "output")
-                            self._make_files(d, files, out, rng, fresh(rng) if vary else kw, tick)
+                            self._make_files(d, files, out, rng, fresh(rng) if vary else kw, tick, nk)
                             outs.append(top)
                     else:
                         # 썸네일은 폴더 없이 바탕화면에 '병원명 썸넬 1.jpg' 처럼 바로 저장
@@ -958,7 +960,7 @@ class KeywordDialog(tk.Toplevel):
                             out = os.path.join(root, base)
                         else:
                             out = core.next_numbered_dir(root, base)
-                        self.tab._make_files(self.item, files, out, rng, fresh(rng) if vary else kw, tick)
+                        self.tab._make_files(self.item, files, out, rng, fresh(rng) if vary else kw, tick, name_kw)
                         made += 1
                 self.q.put(("done", made, None))
             except Exception as e:
@@ -1218,7 +1220,7 @@ class BundleDialog(tk.Toplevel):
                     for k in range(count):
                         folder = os.path.join(root, safe(proc) if count == 1 else f"{safe(proc)} {k + 1}")
                         out = os.path.join(folder, "output") if use_out else folder
-                        self.tab._make_files(sd, files, out, rng, fresh(rng) if per else run_kw, tick)
+                        self.tab._make_files(sd, files, out, rng, fresh(rng) if per else run_kw, tick, name_kw)
                         made += 1
                 self.q.put(("done", made, None))
             except Exception as e:
