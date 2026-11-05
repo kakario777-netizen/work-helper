@@ -17,6 +17,7 @@ from common import (APP_NAME, GRAY, FONT, FONT_B, known_folder, enable_drop, dro
 META = "_정보.json"
 TILE_MIN = 130
 SEL_BG, NORM_BG, ADD_BG = "#cfe3ff", "#f4f4f4", "#ffffff"
+SPECIAL_BG, SPECIAL_SEL = "#dcecfb", "#9cc9f2"   # 특수 가공 칸: 연한 파랑
 
 
 class LibraryTab(ttk.Frame):
@@ -114,7 +115,7 @@ class LibraryTab(ttk.Frame):
         right = ttk.Frame(body, padding=(10, 0))
         body.add(right, weight=1, minsize=240)
         if self.is_img:
-            ttk.Button(right, text="특수 가공 (워터마크 · GIF)", command=lambda: SpecialDialog(self)).pack(
+            ttk.Button(right, text="특수 가공 (워터마크 · GIF)", command=self._open_special).pack(
                 fill="x", pady=(0, 10), ipady=3)
         if self.is_img:
             gn = ttk.LabelFrame(right, text=" 파일명 ", padding=8)
@@ -233,11 +234,16 @@ class LibraryTab(ttk.Frame):
                 n = len(core.list_images(d))
                 self.groups.append((d, m["hospital"], m["procedure"], n))
                 self.procs.append((d, m["hospital"], m["procedure"], n))
+        if self.is_img:   # 특수 가공 칸은 맨 앞에
+            self.groups.sort(key=lambda g: 0 if self._is_special(g[0]) else 1)
         alive = {g[0] for g in self.groups}
         self.sel = [d for d in ([select] if select else self.sel) if d in alive]
         self.tree.delete(*self.tree.get_children())
         for d, h, p, n in self.groups:
-            self.tree.insert("", "end", iid=d, values=(h, p, n) if self.is_img else (h, n))
+            pp = ("★ " + p) if self.is_img and self._is_special(d) else p
+            self.tree.insert("", "end", iid=d, values=(h, pp, n) if self.is_img else (h, n),
+                             tags=("special",) if self.is_img and self._is_special(d) else ())
+        self.tree.tag_configure("special", background=SPECIAL_BG)
         self._build_grid(force=True)
         self._sync_selection()
 
@@ -272,6 +278,13 @@ class LibraryTab(ttk.Frame):
                              relief="groove", bd=2, width=1, height=6, font=FONT, cursor="hand2")
                 t.bind("<Button-1>", lambda e: self._add_folder())
                 enable_drop(t, self._dropped)
+            elif self.is_img and self._is_special(g[0]):
+                d, h, p, n = g
+                t = tk.Label(inner, text=f"★ 특수 가공\n{h}\n{p}\n{n}장", bg=SPECIAL_BG, relief="raised", bd=2,
+                             width=1, height=6, font=FONT, cursor="hand2", wraplength=TILE_MIN - 12, fg="#14467a")
+                t.bind("<Button-1>", lambda e, d=d: self._tile_click(e, d))
+                t.bind("<Double-Button-1>", lambda e, d=d: SpecialDialog(self, d))
+                self.tiles[d] = t
             elif self.is_img and self._is_bundle(g[0]):
                 d, h, p, n = g
                 t = tk.Frame(inner, bg="#b9c3cf", bd=0)
@@ -321,7 +334,9 @@ class LibraryTab(ttk.Frame):
     def _paint_tiles(self):
         for d, t in getattr(self, "tiles", {}).items():
             on = d in self.sel
-            t.config(bg=SEL_BG if on else NORM_BG, relief="sunken" if on else "raised")
+            sp = self.is_img and self._is_special(d)
+            t.config(bg=(SPECIAL_SEL if sp else SEL_BG) if on else (SPECIAL_BG if sp else NORM_BG),
+                     relief="sunken" if on else "raised")
 
     def _tile_click(self, e, d):
         ctrl = e.state & 0x0004
@@ -451,6 +466,37 @@ class LibraryTab(ttk.Frame):
             self.app.status(f"{len(groups)}개 항목을 보관했습니다. 이름이 맞는지 확인해주세요.")
 
     # ── 묶음(한 병원 · 여러 시술) ──
+    def _is_special(self, d):
+        return bool(d) and bool(self._meta_raw(d).get("special"))
+
+    def _files_of(self, d):
+        """만들 때 쓸 원본 목록 (특수 가공 칸은 정해 둔 순서대로)"""
+        if not self._is_special(d):
+            return core.list_images(d)
+        order = self._meta_raw(d).get("order") or []
+        files = [os.path.join(d, n) for n in order if os.path.exists(os.path.join(d, n))]
+        return files + [f for f in core.list_images(d) if os.path.basename(f) not in order]
+
+    def _make_files(self, d, files, out, rng, kw, tick):
+        """일반 칸: 기존 가공, 특수 칸: 저장된 워터마크·GIF 설정으로 특수 가공"""
+        nk = self._name_kw()
+        if self._is_special(d):
+            import special
+            m = self._meta_raw(d).get("sp", {})
+            img_wm = dict(special.DEFAULT_IMG_WM, **m.get("img_wm", {}))
+            gif_wm = dict(special.DEFAULT_GIF_WM, **m.get("gif_wm", {}))
+            use_kw = kw if m.get("base", True) else {"width": None, "trim": 0, "aspect": 0, "base": {}}
+            special.run(files, out, use_kw, img_wm, gif_wm, m.get("gif_range", [103, 108]),
+                        nk.get("name_pattern", "{번호}"), nk.get("digits", 1), progress=lambda i: tick(), rng=rng)
+        else:
+            core.make_folder_set(files, out, rng, progress=tick, **nk, **kw)
+
+    def _open_special(self):
+        if len(self.sel) == 1 and self._is_special(self.sel[0]):
+            SpecialDialog(self, self.sel[0])
+        else:
+            SpecialDialog(self)
+
     def _is_bundle(self, d):
         return bool(d) and bool(self._meta_raw(d).get("bundle"))
 
@@ -698,7 +744,7 @@ class LibraryTab(ttk.Frame):
             messagebox.showwarning(APP_NAME, "숫자 칸을 확인해주세요.")
             return
         self.remember()
-        jobs = [(d, core.list_images(d)) for d in self.sel]
+        jobs = [(d, self._files_of(d)) for d in self.sel]
         jobs = [(d, f) for d, f in jobs if f]
         if not jobs:
             messagebox.showinfo(APP_NAME, "선택한 항목에 이미지가 없습니다.")
@@ -726,8 +772,7 @@ class LibraryTab(ttk.Frame):
                         for _ in range(count):
                             top = core.next_numbered_dir(desktop, self._out_base(d))
                             out = os.path.join(top, "output")
-                            core.make_folder_set(files, out, rng, progress=tick, **self._name_kw(),
-                                                 **(fresh(rng) if vary else kw))
+                            self._make_files(d, files, out, rng, fresh(rng) if vary else kw, tick)
                             outs.append(top)
                     else:
                         # 썸네일은 폴더 없이 바탕화면에 '병원명 썸넬 1.jpg' 처럼 바로 저장
@@ -886,7 +931,7 @@ class KeywordDialog(tk.Toplevel):
         except Exception:
             messagebox.showwarning(APP_NAME, "숫자를 확인해주세요.", parent=self)
             return
-        files = core.list_images(self.item)
+        files = self.tab._files_of(self.item)
         vary = self.vary.get()
         fresh = self.tab._fresh_factory(kw)
         name_kw = self.tab._name_kw()
@@ -913,8 +958,7 @@ class KeywordDialog(tk.Toplevel):
                             out = os.path.join(root, base)
                         else:
                             out = core.next_numbered_dir(root, base)
-                        core.make_folder_set(files, out, rng, progress=tick, **name_kw,
-                                             **(fresh(rng) if vary else kw))
+                        self.tab._make_files(self.item, files, out, rng, fresh(rng) if vary else kw, tick)
                         made += 1
                 self.q.put(("done", made, None))
             except Exception as e:
@@ -1067,7 +1111,8 @@ class BundleDialog(tk.Toplevel):
             on = keep.get(sd, True if checked is None else key in checked)
             self.checks[sd] = on
             self.tree.insert("", "end", iid=sd, tags=() if on else ("off",),
-                             values=(self.ON if on else self.OFF, name, len(core.list_images(sd))))
+                             values=(self.ON if on else self.OFF, ("★ " + name) if self.tab._is_special(sd) else name,
+                                     len(core.list_images(sd))))
         self._count()
 
     def _count(self):
@@ -1148,7 +1193,7 @@ class BundleDialog(tk.Toplevel):
             messagebox.showwarning(APP_NAME, "숫자를 확인해주세요.", parent=self)
             return
         self._save()
-        jobs = [(sd, self.tab._read_meta(sd)["procedure"] or os.path.basename(sd), core.list_images(sd)) for sd in procs]
+        jobs = [(sd, self.tab._read_meta(sd)["procedure"] or os.path.basename(sd), self.tab._files_of(sd)) for sd in procs]
         root = self.last_root = self._target_dir()
         fresh = self.tab._fresh_factory(kw)
         name_kw = self.tab._name_kw()
@@ -1173,8 +1218,7 @@ class BundleDialog(tk.Toplevel):
                     for k in range(count):
                         folder = os.path.join(root, safe(proc) if count == 1 else f"{safe(proc)} {k + 1}")
                         out = os.path.join(folder, "output") if use_out else folder
-                        core.make_folder_set(files, out, rng, progress=tick, **name_kw,
-                                             **(fresh(rng) if per else run_kw))
+                        self.tab._make_files(sd, files, out, rng, fresh(rng) if per else run_kw, tick)
                         made += 1
                 self.q.put(("done", made, None))
             except Exception as e:
@@ -1210,19 +1254,25 @@ class BundleDialog(tk.Toplevel):
 class SpecialDialog(tk.Toplevel):
     """특수 가공: 이미지·GIF를 끌어다 놓고 순서 정하기 → 이미지는 기존 가공 + 워터마크, GIF는 크기 조절 + 워터마크(움직임 유지)"""
 
-    def __init__(self, tab):
+    def __init__(self, tab, item=None):
         super().__init__(tab.app.root)
         import special
         self.sp = special
         self.tab, self.app = tab, tab.app
-        s = self.app.settings
-        self.title("특수 가공 - 워터마크 · GIF")
+        self.item = item
+        s = dict(self.app.settings)
+        if item:   # 저장된 버튼 고치기: 그 버튼의 설정을 불러옴
+            m = tab._meta_raw(item).get("sp", {})
+            s.update({"sp_img_wm": m.get("img_wm", {}), "sp_gif_wm": m.get("gif_wm", {}),
+                      "sp_gif_range": m.get("gif_range", [103, 108]), "sp_base": m.get("base", True)})
+        self._s = s
+        self.title("특수 가공 - 워터마크 · GIF" + (" (저장된 버튼 고치기)" if item else ""))
         self.transient(self.app.root)
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         w, h = int(sw * 0.8), int(sh * 0.8)
         self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 3}")
         self.minsize(900, 560)
-        self.files = []
+        self.files = list(tab._files_of(item)) if item else []
         self.q = queue.Queue()
         self.worker = None
         self._drag = None
@@ -1296,38 +1346,53 @@ class SpecialDialog(tk.Toplevel):
                        "100 = 그대로, 105 = 5% 크게, 95 = 5% 작게.\n재생 속도·반복·프레임 수는 그대로 둡니다.").pack(side="left", padx=6)
         self.gif_wm = self._wm_frame(g1, "sp_gif_wm", special.DEFAULT_GIF_WM)
 
-        g2 = ttk.LabelFrame(right, text=" 저장 ", padding=8)
+        g2 = ttk.LabelFrame(right, text=" 버튼으로 저장 ", padding=8)
         g2.pack(fill="x", pady=(10, 0))
-        ttk.Label(g2, text="폴더 이름").pack(side="left")
-        self.out_name = tk.StringVar(value=s.get("sp_name", "특수가공"))
-        ttk.Entry(g2, textvariable=self.out_name, width=20).pack(side="left", padx=6)
-        self.where = ttk.Label(g2, text="", foreground="#0a5")
-        self.where.pack(side="left", padx=6)
-        self.out_name.trace_add("write", lambda *a: self._where())
-
-        self.run_btn = ttk.Button(right, text="특수 가공 시작", style="Big.TButton", command=self._run)
-        self.run_btn.pack(fill="x", pady=(12, 4), ipady=4)
-        self.prog = ttk.Progressbar(right, mode="determinate")
-        self.prog.pack(fill="x", pady=4)
-        self.result = WrapLabel(right, text="")
-        self.result.pack(fill="x")
-        self.open_btn = ttk.Button(right, text="결과 폴더 열기", state="disabled",
-                                   command=lambda: open_folder(self.last_out))
-        self.open_btn.pack(anchor="w", pady=(6, 0))
-        self._where()
+        m0 = tab._read_meta(item) if item else {}
+        ttk.Label(g2, text="병원명").grid(row=0, column=0, sticky="w")
+        self.h_var = tk.StringVar(value=m0.get("hospital", s.get("sp_last_h", "")))
+        ttk.Entry(g2, textvariable=self.h_var, width=20).grid(row=0, column=1, sticky="we", padx=6, pady=2)
+        ttk.Label(g2, text="시술명").grid(row=1, column=0, sticky="w")
+        self.p_var = tk.StringVar(value=m0.get("procedure", "특수"))
+        ttk.Entry(g2, textvariable=self.p_var, width=20).grid(row=1, column=1, sticky="we", padx=6, pady=2)
+        help_label(g2, "저장하면 이미지 생성 탭에 연한 파란색 '★ 특수 가공' 칸이 맨 앞에 생깁니다.\n"
+                       "그 칸을 고르고 '선택 항목 만들기'로 다른 칸처럼 폴더 개수만큼 만듭니다.\n"
+                       "(이미지는 이 창의 순서대로, 워터마크·GIF 설정도 이 버튼에 저장)\n\n"
+                       "'병원 버튼 안에 넣기'를 고르면 그 병원 칸의 '세부 선택' 안에 시술 하나로 들어갑니다.\n"
+                       "저장한 칸을 더블클릭하면 이 창이 다시 열려 고칠 수 있어요.").grid(row=0, column=2, rowspan=2, padx=6)
+        g2.columnconfigure(1, weight=1)
+        bb2 = ttk.Frame(right)
+        bb2.pack(fill="x", pady=(10, 0))
+        if item:
+            ttk.Button(bb2, text="이 버튼 저장 (고치기)", style="Big.TButton", command=self._save_edit).pack(fill="x", ipady=3)
+        ttk.Button(bb2, text="새 버튼으로 추가", style="Big.TButton", command=self._save_new).pack(fill="x", ipady=3, pady=(6, 0))
+        inr = ttk.Frame(bb2)
+        inr.pack(fill="x", pady=(8, 0))
+        self.bundle_map = {f"{h}  (시술 {p.split()[1] if len(p.split()) > 1 else ''})": d
+                           for d, h, p, n in tab.groups if tab._is_bundle(d)}
+        self.bundle_var = tk.StringVar(value=next(iter(self.bundle_map), ""))
+        ttk.Combobox(inr, textvariable=self.bundle_var, values=list(self.bundle_map), state="readonly",
+                     width=26).pack(side="left", fill="x", expand=True)
+        ttk.Button(inr, text="병원 버튼 안에 넣기", command=self._save_into).pack(side="left", padx=(6, 0), ipady=2)
+        if not self.bundle_map:
+            ttk.Label(bb2, text="(병원 묶음 칸이 아직 없습니다)", foreground=GRAY).pack(anchor="w")
+        self.result = WrapLabel(right, text="", foreground="#0a5")
+        self.result.pack(fill="x", pady=(8, 0))
+        self._refill()
         self.protocol("WM_DELETE_WINDOW", self._close)
 
     # ── 워터마크 설정 칸 ──
     def _wm_frame(self, parent, key, default):
         sp = self.sp
         cur = dict(default)
-        cur.update(self.app.settings.get(key, {}))
+        cur.update(self._s.get(key, {}))
         f = ttk.Frame(parent)
         f.pack(fill="x", pady=(8, 0))
         v = {"on": tk.BooleanVar(value=cur["on"]), "text": tk.StringVar(value=cur["text"]),
              "style": tk.StringVar(value=cur["style"]), "size": tk.DoubleVar(value=cur["size"]),
              "opacity": tk.DoubleVar(value=cur["opacity"]), "angle": tk.DoubleVar(value=cur["angle"]),
-             "color": tk.StringVar(value=cur["color"]), "font": tk.StringVar(value=cur["font"])}
+             "color": tk.StringVar(value=cur["color"]), "font": tk.StringVar(value=cur["font"]),
+             "tracking": tk.DoubleVar(value=cur.get("tracking", 0)), "gap": tk.DoubleVar(value=cur.get("gap", 40))}
         ttk.Checkbutton(f, text="워터마크 넣기", variable=v["on"]).grid(row=0, column=0, sticky="w")
         ttk.Label(f, text="문구").grid(row=0, column=1, sticky="e", padx=(10, 2))
         ttk.Entry(f, textvariable=v["text"], width=18).grid(row=0, column=2, sticky="w")
@@ -1341,12 +1406,18 @@ class SpecialDialog(tk.Toplevel):
         ttk.Spinbox(f, from_=-90, to=90, increment=5, textvariable=v["angle"], width=6).grid(row=3, column=1, sticky="w")
         ttk.Label(f, text="색").grid(row=3, column=2, sticky="w")
         ttk.Combobox(f, textvariable=v["color"], values=list(sp.COLORS), state="readonly", width=6).grid(row=3, column=3, sticky="w")
+        ttk.Label(f, text="자간 (글자 간격 %)").grid(row=6, column=0, sticky="w", pady=3)
+        ttk.Spinbox(f, from_=-20, to=150, increment=5, textvariable=v["tracking"], width=6).grid(row=6, column=1, sticky="w")
+        ttk.Label(f, text="문구 사이 간격 (%)").grid(row=6, column=2, sticky="w")
+        ttk.Spinbox(f, from_=0, to=90, increment=5, textvariable=v["gap"], width=6).grid(row=6, column=3, sticky="w")
         ttk.Label(f, text="글꼴").grid(row=4, column=0, sticky="w")
         ttk.Combobox(f, textvariable=v["font"], values=sp.FONTS, state="readonly", width=24).grid(row=4, column=1, columnspan=3, sticky="w")
         help_label(f, "위치: 대각선 2개(기울여서 위·아래 두 곳) / 위쪽 모서리 2개 / 네 모서리 / 가운데 / 바둑판 반복\n"
                       "크기: 글자 한 덩이 폭이 이미지 가로의 몇 % 인지\n진하기: 낮을수록 흐릿 (예: 이미지 10%, GIF 75%)\n"
-                      "기울기는 대각선·가운데·바둑판에만 적용됩니다. 한글 문구는 맑은 고딕으로 씁니다.").grid(
-            row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
+                      "기울기는 대각선·가운데·바둑판에만 적용됩니다. 한글 문구는 맑은 고딕으로 씁니다.\n"
+                      "자간: 글자와 글자 사이 (0 = 기본, 30 = 글자 크기의 30% 만큼 더 띄움)\n"
+                      "문구 사이 간격: 대각선 두 문구가 서로 얼마나 떨어질지 (40 = 기본, 클수록 멀리) · 바둑판은 반복 간격").grid(
+            row=7, column=0, columnspan=4, sticky="w", pady=(4, 0))
         for var in v.values():
             var.trace_add("write", lambda *a: self._preview_later())
         return v
@@ -1358,7 +1429,8 @@ class SpecialDialog(tk.Toplevel):
                 o[k] = var.get()
             except Exception:
                 o[k] = self.sp.DEFAULT_IMG_WM.get(k)
-        self.app.settings[key] = o
+        if not self.item:   # 새로 만들 때만 다음 기본값으로 기억
+            self.app.settings[key] = o
         return o
 
     # ── 목록 ──
@@ -1465,76 +1537,106 @@ class SpecialDialog(tk.Toplevel):
             return sp.watermark(im, wm).convert("RGB")
         self.prev.show(p, proc, self.files)
 
-    # ── 실행 ──
-    def _target(self):
-        base = self.tab._safe(self.out_name.get().strip() or "특수가공")
-        return core.next_numbered_dir(known_folder("desktop"), base)
+    # ── 버튼으로 저장 ──
+    def _blob(self):
+        try:
+            gr = [float(self.g_lo.get()), float(self.g_hi.get())]
+        except Exception:
+            gr = [103, 108]
+        return {"img_wm": self._wm_get(self.img_wm, "sp_img_wm"), "gif_wm": self._wm_get(self.gif_wm, "sp_gif_wm"),
+                "gif_range": gr, "base": bool(self.base_on.get())}
 
-    def _where(self):
-        self.where.config(text=f"바탕화면\\{os.path.basename(self._target())}\\")
+    def _check(self):
+        if not self.tree.get_children():
+            messagebox.showinfo(APP_NAME, "이미지나 GIF를 먼저 넣어주세요.", parent=self)
+            return False
+        return True
+
+    def _write_item(self, d, hospital, procedure):
+        """창의 순서대로 파일을 d 에 맞추고(새 파일 복사·빠진 파일 삭제) 설정 저장"""
+        order, keep = [], set()
+        dn = os.path.normcase(os.path.abspath(d))
+        for p in self.tree.get_children():
+            if os.path.normcase(os.path.dirname(os.path.abspath(p))) == dn:
+                name = os.path.basename(p)
+            else:
+                dst = core._unique(os.path.join(d, os.path.basename(p)))
+                shutil.copy2(p, dst)
+                name = os.path.basename(dst)
+            order.append(name)
+            keep.add(name)
+        for f in core.list_images(d):
+            if os.path.basename(f) not in keep:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+        self.tab._write_meta(d, hospital, procedure, special=True, order=order, sp=self._blob())
+        self.app.settings["sp_last_h"] = hospital
+
+    def _names(self):
+        h, p = self.h_var.get().strip(), self.p_var.get().strip() or "특수"
+        if not h:
+            messagebox.showinfo(APP_NAME, "병원명을 적어주세요.", parent=self)
+            return None
+        return h, p
+
+    def _save_new(self):
+        if not self._check():
+            return
+        nm = self._names()
+        if not nm:
+            return
+        base = self.tab._safe(f"{nm[0]} {nm[1]}")
+        d = os.path.join(self.tab.lib, base)
+        k = 2
+        while os.path.exists(d):
+            d = os.path.join(self.tab.lib, f"{base} ({k})")
+            k += 1
+        os.makedirs(d)
+        self._write_item(d, *nm)
+        self.tab.reload(select=d)
+        self.result.config(text=f"'★ {nm[0]} {nm[1]}' 칸을 이미지 생성 탭 맨 앞에 추가했습니다.")
+        self._close()
+
+    def _save_into(self):
+        if not self._check():
+            return
+        bd = self.bundle_map.get(self.bundle_var.get())
+        if not bd:
+            messagebox.showinfo(APP_NAME, "넣을 병원 칸을 골라주세요.", parent=self)
+            return
+        hospital = self.tab._read_meta(bd)["hospital"]
+        proc = self.p_var.get().strip() or "특수"
+        base = self.tab._safe(proc)
+        d = os.path.join(bd, base)
+        k = 2
+        while os.path.exists(d):
+            d = os.path.join(bd, f"{base} ({k})")
+            k += 1
+        os.makedirs(d)
+        self._write_item(d, hospital, proc)
+        self.tab.reload(select=bd)
+        self.result.config(text=f"'{hospital}' 칸의 세부 선택 안에 '★ {proc}' 로 넣었습니다.")
+        self._close()
+
+    def _save_edit(self):
+        if not self.item or not self._check():
+            return
+        nm = self._names()
+        if not nm:
+            return
+        self._write_item(self.item, *nm)
+        self.tab.reload(select=self.item if os.path.dirname(self.item) == self.tab.lib else None)
+        self._close()
 
     def _close(self):
         try:
-            self._wm_get(self.img_wm, "sp_img_wm")
-            self._wm_get(self.gif_wm, "sp_gif_wm")
-            self.app.settings.update(sp_base=self.base_on.get(), sp_name=self.out_name.get(),
-                                     sp_gif_range=[float(self.g_lo.get()), float(self.g_hi.get())])
+            if not self.item:
+                self._wm_get(self.img_wm, "sp_img_wm")
+                self._wm_get(self.gif_wm, "sp_gif_wm")
+                self.app.settings.update(sp_base=self.base_on.get(),
+                                         sp_gif_range=[float(self.g_lo.get()), float(self.g_hi.get())])
         except Exception:
             pass
         self.destroy()
-
-    def _run(self):
-        if self.worker and self.worker.is_alive():
-            return
-        if not self.files:
-            messagebox.showinfo(APP_NAME, "이미지나 GIF를 먼저 넣어주세요.", parent=self)
-            return
-        try:
-            gr = (float(self.g_lo.get()), float(self.g_hi.get()))
-        except Exception:
-            messagebox.showwarning(APP_NAME, "GIF 크기 조절 숫자를 확인해주세요.", parent=self)
-            return
-        img_wm = self._wm_get(self.img_wm, "sp_img_wm")
-        gif_wm = self._wm_get(self.gif_wm, "sp_gif_wm")
-        kw = self.tab._params() if self.base_on.get() else {"width": None, "trim": 0, "aspect": 0, "base": {}}
-        nk = self.tab._name_kw()
-        items = list(self.tree.get_children())
-        out = self.last_out = self._target()
-        self.app.settings.update(sp_base=self.base_on.get(), sp_name=self.out_name.get(), sp_gif_range=list(gr))
-        self.prog.config(maximum=len(items), value=0)
-        self.run_btn.config(state="disabled")
-        self.result.config(text="가공 중... (GIF는 프레임이 많으면 시간이 조금 걸립니다)")
-        sp = self.sp
-
-        def work():
-            try:
-                saved = sp.run(items, out, kw, img_wm, gif_wm, gr, nk.get("name_pattern", "{번호}"),
-                               nk.get("digits", 1), progress=lambda i: self.q.put(("prog", i)))
-                self.q.put(("done", len(saved), None))
-            except Exception as e:
-                self.q.put(("done", 0, str(e)))
-
-        self.worker = threading.Thread(target=work, daemon=True)
-        self.worker.start()
-        self._poll()
-
-    def _poll(self):
-        try:
-            while True:
-                m = self.q.get_nowait()
-                if m[0] == "prog":
-                    self.prog["value"] = m[1]
-                else:
-                    self.run_btn.config(state="normal")
-                    self.result.config(text=f"완료: 바탕화면\\{os.path.basename(self.last_out)}\\ 에 {m[1]}개"
-                                            + (f"\n오류: {m[2]}" if m[2] else ""))
-                    if m[1]:
-                        self.open_btn.config(state="normal")
-                    self._where()
-                    if m[2]:
-                        messagebox.showerror(APP_NAME, f"가공 중 문제가 생겼습니다.\n{m[2]}", parent=self)
-                    return
-        except queue.Empty:
-            pass
-        if self.winfo_exists():
-            self.after(100, self._poll)

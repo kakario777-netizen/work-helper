@@ -11,9 +11,9 @@ import core
 WM_STYLES = ["대각선 2개", "위쪽 모서리 2개", "네 모서리", "가운데 1개", "바둑판 반복"]
 
 DEFAULT_IMG_WM = {"on": True, "text": "Dr.Kevin", "style": "대각선 2개", "size": 32.0, "opacity": 10,
-                  "angle": 30, "color": "흰색", "font": "기본 (Montserrat ExtraBold)"}
+                  "angle": 30, "color": "흰색", "font": "기본 (Montserrat ExtraBold)", "tracking": 0, "gap": 40}
 DEFAULT_GIF_WM = {"on": True, "text": "Dr.Kevin", "style": "위쪽 모서리 2개", "size": 16.0, "opacity": 75,
-                  "angle": 0, "color": "흰색", "font": "기본 (Montserrat ExtraBold)"}
+                  "angle": 0, "color": "흰색", "font": "기본 (Montserrat ExtraBold)", "tracking": 0, "gap": 40}
 COLORS = {"흰색": (255, 255, 255), "검정": (0, 0, 0), "회색": (128, 128, 128)}
 FONTS = ["기본 (Montserrat ExtraBold)", "Arial Black", "Arial Bold", "맑은 고딕 Bold"]
 
@@ -53,13 +53,27 @@ def get_font(name, text, px):
         return ImageFont.load_default()
 
 
-def _text_layer(text, font, rgb, alpha, angle):
-    """글자 한 덩이(투명 배경)를 만들어 기울임"""
+def _text_width(text, font, track):
+    if not track:
+        l, t, r, b = font.getbbox(text)
+        return r - l
+    return sum(font.getlength(ch) for ch in text) + track * (len(text) - 1)
+
+
+def _text_layer(text, font, rgb, alpha, angle, track=0):
+    """글자 한 덩이(투명 배경)를 만들어 기울임. track = 글자 사이 추가 간격(px)"""
     l, t, r, b = font.getbbox(text)
-    w, h = r - l + 8, b - t + 8
-    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    w = int(_text_width(text, font, track)) + 10 + max(0, -l)
+    h = b - t + 8
+    layer = Image.new("RGBA", (max(4, w), max(4, h)), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    d.text((4 - l, 4 - t), text, font=font, fill=rgb + (alpha,))
+    if not track:
+        d.text((4 - l, 4 - t), text, font=font, fill=rgb + (alpha,))
+    else:
+        x = 4 - l
+        for ch in text:
+            d.text((x, 4 - t), ch, font=font, fill=rgb + (alpha,))
+            x += font.getlength(ch) + track
     if angle:
         layer = layer.rotate(angle, expand=True, resample=Image.BICUBIC)
     return layer
@@ -72,22 +86,26 @@ def watermark(im, o):
     base = im.convert("RGBA")
     W, H = base.size
     text = o["text"].strip()
-    # 크기 = 글자 한 덩이 폭이 이미지 가로의 몇 % 인지
+    # 크기 = 글자 한 덩이 폭이 이미지 가로의 몇 % 인지 (자간 포함)
+    trk = float(o.get("tracking", 0) or 0) / 100   # 글자 크기 대비 %
     f100 = get_font(o.get("font"), text, 100)
-    l, t, r, b = f100.getbbox(text)
-    px = max(8, 100 * (W * float(o.get("size", 20)) / 100) / max(1, r - l))
+    w100 = _text_width(text, f100, trk * 100)
+    px = max(8, 100 * (W * float(o.get("size", 20)) / 100) / max(1, w100))
     font = get_font(o.get("font"), text, px)
+    track = trk * px
     rgb = COLORS.get(o.get("color"), (255, 255, 255))
     alpha = int(255 * max(0, min(100, float(o.get("opacity", 30)))) / 100)
     style = o.get("style", WM_STYLES[0])
     angle = float(o.get("angle", 0)) if style in ("대각선 2개", "가운데 1개", "바둑판 반복") else 0
-    layer = _text_layer(text, font, rgb, alpha, angle)
+    layer = _text_layer(text, font, rgb, alpha, angle, track)
+    gap = max(0.0, min(90.0, float(o.get("gap", 40) or 0))) / 100
     lw, lh = layer.size
     over = Image.new("RGBA", base.size, (0, 0, 0, 0))
     m = int(min(W, H) * 0.025)
     spots = []
     if style == "대각선 2개":
-        spots = [(int(W * 0.30 - lw / 2), int(H * 0.30 - lh / 2)), (int(W * 0.70 - lw / 2), int(H * 0.70 - lh / 2))]
+        a, b = 0.5 - gap / 2, 0.5 + gap / 2   # 두 문구 사이 간격
+        spots = [(int(W * a - lw / 2), int(H * a - lh / 2)), (int(W * b - lw / 2), int(H * b - lh / 2))]
     elif style == "위쪽 모서리 2개":
         spots = [(m, m), (W - lw - m, m)]
     elif style == "네 모서리":
@@ -95,7 +113,8 @@ def watermark(im, o):
     elif style == "가운데 1개":
         spots = [((W - lw) // 2, (H - lh) // 2)]
     else:
-        sx, sy = int(lw * 1.6) + 1, int(lh * 2.4) + 1
+        k = 0.6 + gap * 2.5
+        sx, sy = int(lw * (1 + k)) + 1, int(lh * (1.4 + k * 2)) + 1
         for yy in range(-lh, H + lh, sy):
             off = (yy // sy) % 2 * sx // 2
             for xx in range(-lw + off, W + lw, sx):

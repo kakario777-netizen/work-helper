@@ -535,17 +535,31 @@ def main():
             sd._drop([gsrc])
             sd.tree.move(os.path.join(gsrc, "b.gif"), "", 0)
             sd._renumber()
-            sd.out_name.set("특수가공테스트")
-            sd._target = lambda: os.path.join(tmp, "special out")
-            sd._run()
-            sd.worker.join(120)
-            sd._poll()
+            sd.h_var.set("닥터케빈")
+            sd.p_var.set("특수")
+            sd.img_wm["tracking"].set(20)
+            sd._save_new()
+            spd = [g[0] for g in cap.groups if cap._is_special(g[0])][0]
+            print("special tile:", os.path.basename(spd), "first:", cap.groups[0][0] == spd,
+                  "order", cap._meta_raw(spd).get("order"), flush=True)
             so = os.path.join(tmp, "special out")
+            cap._make_files(spd, cap._files_of(spd), so, random.Random(), cap._params(), lambda: None)
             outs = sorted(os.listdir(so))
             g = Image.open(os.path.join(so, outs[0]))
             print("special:", outs, "gif", g.size, g.n_frames, g.info.get("duration"),
                   "font", special._font_file(special.FONTS[0], "Dr.Kevin"), flush=True)
-            sd._close()
+            # 병원 묶음 안에 넣기
+            bun = [g[0] for g in cap.groups if cap._is_bundle(g[0])]
+            if bun:
+                sd2 = SpecialDialog(cap)
+                sd2._drop([gsrc])
+                sd2.p_var.set("워터마크")
+                sd2.bundle_var.set([k for k, v in sd2.bundle_map.items() if v == bun[0]][0])
+                sd2._save_into()
+                print("special in bundle:", [os.path.basename(x) for x in cap._bundle_subs(bun[0])],
+                      [cap._is_special(x) for x in cap._bundle_subs(bun[0])], flush=True)
+            cap.sel = [g[0] for g in cap.groups if not cap._is_special(g[0]) and not cap._is_bundle(g[0])][:1]
+            cap._sync_selection()
             # 원고 이미지 배치
             pl = app.text_tab.place
             mdir = os.path.join(tmp, "원고")
