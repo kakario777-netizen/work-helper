@@ -451,11 +451,13 @@ def _r1(x):
 
 # 랜덤 버튼 세기: (키 → (최대 변화량, 바뀔 확률))  아주 약하게
 RANDOM_AMP = {
-    "brightness": (2, 1), "contrast": (2, 1), "saturation": (3, 1), "gamma": (3, 1),
-    "highlights": (4, 1), "shadows": (4, 1), "temperature": (3, 1), "tint": (2, 1),
-    "hue": (1, 1), "red": (1.5, 1), "green": (1.5, 1), "blue": (1.5, 1),
+    # 밝기·명암·뿌연 느낌만 조금씩. 붉게/푸르게 되는 색 변화(색온도·색조·색상·빨강·초록·파랑)는 0
+    "brightness": (2.5, 1), "contrast": (2, 1), "saturation": (1.5, 1), "gamma": (3, 1),
+    "highlights": (4, 1), "shadows": (4, 1), "temperature": (0, 0), "tint": (0, 0),
+    "hue": (0, 0), "red": (0, 0), "green": (0, 0), "blue": (0, 0),
     "sharpness": (10, 1), "blur": (3, 0.3), "noise": (3, 0.3), "vignette": (6, 0.4),
 }
+COLOR_SHIFT_KEYS = ("temperature", "tint", "hue", "red", "green", "blue")
 ONE_SIDED = {"blur", "noise", "vignette"}
 
 DEFAULT_RANDOM_RANGE = {
@@ -470,8 +472,10 @@ def random_adjust(rng, keys):
     out = {}
     for k in keys:
         amp, prob = RANDOM_AMP.get(k, (1, 1))
-        if rng.random() > prob:
+        if rng.random() > prob or amp == 0:
             out[k] = 0.0
+        elif k == "saturation":   # 채도는 살짝 낮추는 쪽만 (뿌연 느낌), 진하게 하지 않음
+            out[k] = _r1(-rng.uniform(0, amp))
         elif k in ONE_SIDED:
             out[k] = _r1(rng.uniform(0, amp))
         else:
@@ -490,13 +494,11 @@ def random_size(rng, cfg):
 
 
 def micro_jitter(rng):
-    """장마다 덧붙는 아주 미세한 흔들림"""
+    """장마다 덧붙는 아주 미세한 흔들림 (밝기·명암만, 색 변화 없음)"""
     def pm(lo, hi):
         return rng.choice((-1, 1)) * rng.uniform(lo, hi)
-    j = {"brightness": pm(0.3, 1.2), "contrast": pm(0.3, 1.2), "saturation": pm(1, 2),
-         "gamma": pm(1, 3), "temperature": pm(0, 1.2), "tint": pm(0, 0.8),
-         "red": pm(0, 0.6), "green": pm(0, 0.6), "blue": pm(0, 0.6),
-         "highlights": pm(0, 2), "shadows": pm(0, 2)}
+    j = {"brightness": pm(0.3, 1.2), "contrast": pm(0.3, 1.2), "saturation": -rng.uniform(0, 1),
+         "gamma": pm(1, 3), "highlights": pm(0, 2), "shadows": pm(0, 2)}
     if rng.random() < 0.5:
         j["sharpness"] = pm(0, 8)
     return j

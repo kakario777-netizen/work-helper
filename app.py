@@ -20,6 +20,13 @@ class App:
     def __init__(self, root):
         self.root = root
         self.settings = load_settings()
+        if not self.settings.get("color_tame_v1"):   # 붉게/푸르게 되던 저장값 정리 (한 번만)
+            for key in ("im_adjust", "img_adjust", "th_adjust"):
+                adj = self.settings.get(key)
+                if isinstance(adj, dict):
+                    for k in core.COLOR_SHIFT_KEYS:
+                        adj[k] = 0.0
+            self.settings["color_tame_v1"] = True
         root.title(f"{APP_NAME} {VERSION}")
         try:   # 창 왼쪽 위·작업 표시줄 아이콘 (새 창들도 같은 아이콘)
             root.iconbitmap(default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico"))
