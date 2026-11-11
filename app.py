@@ -13,6 +13,7 @@ from version import VERSION
 from tab_text import TextTab
 from tab_image import ImageArea
 from tab_library import LibraryTab
+from tab_rename import RenamePanel
 
 
 
@@ -58,6 +59,7 @@ class App:
         self.thumb_tab = LibraryTab(self.nb, self, "thumb")
         self.raw_tab = LibraryTab(self.nb, self, "image_raw")
         self.open_tab = LibraryTab(self.nb, self, "thumb_open")
+        self.rename_tab = RenamePanel(self.nb, self)
         self._lib_tabs = [self.cap_tab, self.thumb_tab, self.raw_tab, self.open_tab]
         self.nb.bind("<<NotebookTabChanged>>", self._tab_changed)
         # 메인 탭: 키 → (화면, 이름)
@@ -68,6 +70,7 @@ class App:
             "thumb": (self.thumb_tab, "썸네일 생성"),
             "capture_raw": (self.raw_tab, "이미지 생성 (원본)"),
             "thumb_open": (self.open_tab, "썸네일 실행"),
+            "rename": (self.rename_tab, "파일 이름 변경"),
         }
         self.apply_layout()
         try:
@@ -91,7 +94,8 @@ class App:
 
     # ── 설정 자동 저장 (2초마다 바뀐 게 있으면) ──
     def collect(self):
-        for t in (self.text_tab, self.image_tab, self.cap_tab, self.thumb_tab, self.raw_tab, self.open_tab):
+        for t in (self.text_tab, self.image_tab, self.cap_tab, self.thumb_tab, self.raw_tab, self.open_tab,
+                  self.rename_tab):
             try:
                 t.remember()
             except Exception:
@@ -607,6 +611,26 @@ def main():
             print("raw copy:", rr, sorted(os.listdir(os.path.join(rawdesk, rr))), rt.kw_lbl.cget("text"),
                   sorted(os.listdir(os.path.join(rawdesk, rr, os.listdir(os.path.join(rawdesk, rr))[0]))), flush=True)
             print("tabs:", [app.nb.tab(t, "text").strip() for t in app.nb.tabs()], flush=True)
+            # 파일 이름 변경: 탐색기 순서(1,2,10,11) 그대로
+            rn = app.rename_tab
+            rdir = os.path.join(tmp, "이름바꾸기")
+            os.makedirs(rdir)
+            for nm in ("10.jpg", "2.jpg", "1.jpg", "11.png", "메모.txt"):
+                open(os.path.join(rdir, nm), "wb").write(nm.encode())
+            rn._drop([rdir])
+            rn.pat.set("t{번호}")
+            rn.dig.set(1)
+            rn._refresh()
+            print("rename plan:", [(os.path.basename(o), os.path.basename(n)) for o, n in rn.plan[rdir]], flush=True)
+            import tkinter.messagebox as _mb2
+            _ok = _mb2.askyesno
+            _mb2.askyesno = lambda *a, **k: True
+            rn._run()
+            after = sorted(os.listdir(rdir))
+            same = open(os.path.join(rdir, "t4.png"), "rb").read() == b"11.png"
+            rn._undo()
+            _mb2.askyesno = _ok
+            print("rename done:", after, "content kept:", same, "undo:", sorted(os.listdir(rdir)), flush=True)
             # 원고 이미지 배치
             pl = app.text_tab.place
             mdir = os.path.join(tmp, "원고")
