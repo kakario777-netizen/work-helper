@@ -48,6 +48,7 @@ class App:
         style.configure("Big.TButton", font=("맑은 고딕", 12, "bold"), padding=(10, 10))
 
         install_wheel(root)
+        self._lib_tabs = []
         self.nb = ttk.Notebook(root)
         self.nb.pack(fill="both", expand=True, padx=8, pady=(8, 0))
         self.text_tab = TextTab(self.nb, self)
@@ -55,12 +56,18 @@ class App:
         self.image_tab = self.image_area.main
         self.cap_tab = LibraryTab(self.nb, self, "image")
         self.thumb_tab = LibraryTab(self.nb, self, "thumb")
+        self.raw_tab = LibraryTab(self.nb, self, "image_raw")
+        self.open_tab = LibraryTab(self.nb, self, "thumb_open")
+        self._lib_tabs = [self.cap_tab, self.thumb_tab, self.raw_tab, self.open_tab]
+        self.nb.bind("<<NotebookTabChanged>>", self._tab_changed)
         # 메인 탭: 키 → (화면, 이름)
         self.tabs = {
             "text": (self.text_tab, "텍스트 정리"),
             "image": (self.image_area, "이미지 가공"),
             "capture": (self.cap_tab, "이미지 생성"),
             "thumb": (self.thumb_tab, "썸네일 생성"),
+            "capture_raw": (self.raw_tab, "이미지 생성 (원본)"),
+            "thumb_open": (self.open_tab, "썸네일 실행"),
         }
         self.apply_layout()
         try:
@@ -84,7 +91,7 @@ class App:
 
     # ── 설정 자동 저장 (2초마다 바뀐 게 있으면) ──
     def collect(self):
-        for t in (self.text_tab, self.image_tab, self.cap_tab, self.thumb_tab):
+        for t in (self.text_tab, self.image_tab, self.cap_tab, self.thumb_tab, self.raw_tab, self.open_tab):
             try:
                 t.remember()
             except Exception:
@@ -119,6 +126,17 @@ class App:
 
     def open_update(self):
         UpdateDialog(self)
+
+    def _tab_changed(self, _e=None):
+        try:
+            cur = self.nb.nametowidget(self.nb.select())
+        except Exception:
+            return
+        if cur in self._lib_tabs:
+            try:
+                cur.reload()
+            except Exception:
+                pass
 
     def apply_layout(self):
         s = self.settings
@@ -567,6 +585,28 @@ def main():
                       [cap._is_special(x) for x in cap._bundle_subs(bun[0])], flush=True)
             cap.sel = [g[0] for g in cap.groups if not cap._is_special(g[0]) and not cap._is_bundle(g[0])][:1]
             cap._sync_selection()
+            # 이미지 생성 (원본): 원본 그대로 복사, 키워드 목록대로
+            rt = app.raw_tab
+            rt.lib = cap.lib
+            rt.reload()
+            one = [g[0] for g in rt.groups if not rt._is_bundle(g[0]) and not rt._is_special(g[0])][0]
+            rt.sel = [one]
+            rt._sync_selection()
+            rt._write_meta(one, raw_keywords=["오스템임플란트 가격 비용", "전체임플란트", "강남역치과 임플란트수술"])
+            rt._raw_kw_label()
+            rawdesk = os.path.join(tmp, "rawdesk")
+            os.makedirs(rawdesk)
+            import tab_library as _tl
+            _orig_kf = _tl.known_folder
+            _tl.known_folder = lambda w: rawdesk if w == "desktop" else _orig_kf(w)
+            rt._run()
+            rt.worker.join(60)
+            rt._poll()
+            _tl.known_folder = _orig_kf
+            rr = os.listdir(rawdesk)[0]
+            print("raw copy:", rr, sorted(os.listdir(os.path.join(rawdesk, rr))), rt.kw_lbl.cget("text"),
+                  sorted(os.listdir(os.path.join(rawdesk, rr, os.listdir(os.path.join(rawdesk, rr))[0]))), flush=True)
+            print("tabs:", [app.nb.tab(t, "text").strip() for t in app.nb.tabs()], flush=True)
             # 원고 이미지 배치
             pl = app.text_tab.place
             mdir = os.path.join(tmp, "원고")

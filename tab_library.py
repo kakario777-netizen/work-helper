@@ -28,8 +28,10 @@ class LibraryTab(ttk.Frame):
     def __init__(self, master, app, kind):
         super().__init__(master, padding=8)
         self.app = app
-        self.is_img = kind == "image"
-        self.k = "img" if self.is_img else "th"
+        self.raw = kind == "image_raw"        # 이미지 생성 (원본): 가공 없이 원본 복사
+        self.opener = kind == "thumb_open"    # 썸네일 실행: 칸을 누르면 원본 하나를 열어 줌
+        self.is_img = kind in ("image", "image_raw")
+        self.k = {"image": "img", "thumb": "th", "image_raw": "imgraw", "thumb_open": "thopen"}[kind]
         sub = "병원이미지" if self.is_img else "썸네일"
         self.lib = os.path.join(known_folder("documents"), "업무도우미", sub)
         os.makedirs(self.lib, exist_ok=True)
@@ -111,13 +113,16 @@ class LibraryTab(ttk.Frame):
         self.adjust = AdjustPanel(m, app, f"{self.k}_adjust", on_change=self._update_preview, scroll=False)
         self.adjust.pack(fill="x")
 
+        if self.raw or self.opener:   # 가공이 없으니 가공 설정 칸은 숨김
+            body.forget(mid)
+
         # ══ 오른쪽: 이름 · 만들기 ══
         right = ttk.Frame(body, padding=(10, 0))
         body.add(right, weight=1, minsize=240)
-        if self.is_img:
+        if self.is_img and not self.raw:
             ttk.Button(right, text="특수 가공 (워터마크 · GIF)", command=self._open_special).pack(
                 fill="x", pady=(0, 10), ipady=3)
-        if self.is_img:
+        if self.is_img and not self.raw:
             gn = ttk.LabelFrame(right, text=" 파일명 ", padding=8)
             gn.pack(fill="x", pady=(0, 10))
             self.name_pat = tk.StringVar(value=s.get("img_name_pat", "{번호}"))
@@ -150,14 +155,22 @@ class LibraryTab(ttk.Frame):
         g1.columnconfigure(1, weight=1)
 
         g2 = ttk.LabelFrame(right, text=" 만들기 ", padding=8)
-        g2.pack(fill="x", pady=10)
+        if not self.opener:
+            g2.pack(fill="x", pady=10)
         label = "폴더 개수" if self.is_img else "이미지 장수"
         ttk.Label(g2, text=label, font=FONT_B).grid(row=0, column=0, sticky="w")
         self.count = tk.IntVar(value=s.get(f"{self.k}_count", 5 if self.is_img else 10))
         ttk.Spinbox(g2, from_=1, to=500, textvariable=self.count, width=6).grid(row=0, column=1, sticky="w", padx=6)
         self.vary = tk.BooleanVar(value=s.get(f"{self.k}_vary", False))
-        ttk.Checkbutton(g2, text=("폴더마다 다른 랜덤값" if self.is_img else "장마다 다른 랜덤값"),
-                        variable=self.vary).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        if self.raw:
+            kf = ttk.Frame(g2)
+            kf.grid(row=1, column=0, columnspan=2, sticky="we", pady=(6, 0))
+            ttk.Button(kf, text="키워드 목록", command=self._raw_keywords).pack(side="left")
+            self.kw_lbl = ttk.Label(kf, text="", foreground="#0a5")
+            self.kw_lbl.pack(side="left", padx=8)
+        else:
+            ttk.Checkbutton(g2, text=("폴더마다 다른 랜덤값" if self.is_img else "장마다 다른 랜덤값"),
+                            variable=self.vary).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
         hint = ("폴더 하나에 원본 이미지 전부가 한 장씩 같은 조건으로 변형되어 들어갑니다.\n"
                 "'폴더마다 다른 랜덤값'을 켜면 폴더를 만들 때마다 '랜덤'을 새로 누른 것처럼 "
                 "가로 크기·테두리·비율·색감이 바뀝니다. (한 폴더 안은 모두 같은 값)\n\n"
@@ -166,14 +179,25 @@ class LibraryTab(ttk.Frame):
                      "'장마다 다른 랜덤값'을 켜면 한 장마다 '랜덤'을 새로 누른 것처럼 "
                      "가로 크기·테두리·비율·색감이 바뀝니다. (끄면 전부 같은 조건)\n\n"
                      "결과는 바탕화면에 '병원명 썸넬 1.jpg' 처럼 저장됩니다.")
+        if self.raw:
+            hint = ("가공 없이 원본 이미지 그대로(이름·내용 그대로) 복사합니다.\n\n"
+                    "· 키워드 목록이 비어 있으면: 폴더 개수만큼 바탕화면\\병원 시술 1\\output\\ …\n"
+                    "· 키워드 목록이 있으면: 키워드 수만큼, 바탕화면\\병원 시술 날짜\\키워드\\ 폴더마다 원본 전부\n"
+                    "  (키워드 목록은 칸마다 따로 저장됩니다)")
         help_label(g2, hint).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.where = WrapLabel(g2, text="", foreground="#0a5")
         self.where.grid(row=3, column=0, columnspan=2, sticky="we", pady=(8, 0))
         g2.columnconfigure(1, weight=1)
 
-        self.run_btn = ttk.Button(right, text="선택 항목 만들기", style="Big.TButton", command=self._run)
+        run_text = "선택 항목 원본 복사" if self.raw else "랜덤으로 하나 열기" if self.opener else "선택 항목 만들기"
+        self.run_btn = ttk.Button(right, text=run_text, style="Big.TButton",
+                                  command=(lambda: self.sel and self._open_random(self.sel[0])) if self.opener else self._run)
         self.run_btn.pack(fill="x", ipady=4)
-        if self.is_img:
+        if self.opener:
+            help_label(right, "칸을 누르면 그 병원 썸네일 중 하나를 무작위로 골라 윈도우 사진 앱으로 엽니다.\n"
+                              "폴더에서 연 것처럼 사진 앱에서 ← → 로 다음·이전 사진으로 넘어갈 수 있어요.\n"
+                              "(가공 없이 원본 그대로 엽니다)").pack(anchor="w", pady=(6, 0))
+        if self.is_img and not self.raw:
             ttk.Button(right, text="키워드 생성하기", command=self._keyword_dialog).pack(fill="x", pady=(6, 0), ipady=2)
         ttk.Frame(right, height=8).pack()
         self.prog = ttk.Progressbar(right, mode="determinate")
@@ -338,7 +362,24 @@ class LibraryTab(ttk.Frame):
             t.config(bg=(SPECIAL_SEL if sp else SEL_BG) if on else (SPECIAL_BG if sp else NORM_BG),
                      relief="sunken" if on else "raised")
 
+    def _open_random(self, d):
+        files = [f for f in self._files_of(d)]
+        if not files and self._is_bundle(d):
+            for sd in self._bundle_subs(d):
+                files += self._files_of(sd)
+        if not files:
+            messagebox.showinfo(APP_NAME, "이 칸에 이미지가 없습니다.")
+            return
+        f = random.choice(files)
+        open_folder(f)   # 윈도우 기본 사진 앱으로 열기
+        self.app.status(f"열었습니다: {os.path.basename(f)}  ({len(files)}장 중)")
+
     def _tile_click(self, e, d):
+        if self.opener:
+            self.sel = [d]
+            self._sync_selection()
+            self._open_random(d)
+            return
         ctrl = e.state & 0x0004
         if ctrl:
             if d in self.sel:
@@ -480,6 +521,12 @@ class LibraryTab(ttk.Frame):
     def _make_files(self, d, files, out, rng, kw, tick, nk=None):
         """일반 칸: 기존 가공, 특수 칸: 저장된 워터마크·GIF 설정으로 특수 가공
         (작업 스레드에서 부르므로 화면 값은 nk 로 미리 받아 옴)"""
+        if self.raw:   # 가공 없이 원본 그대로 복사
+            os.makedirs(out, exist_ok=True)
+            for f in files:
+                shutil.copy2(f, core._unique(os.path.join(out, os.path.basename(f))))
+                tick()
+            return
         nk = nk if nk is not None else self._name_kw()
         if self._is_special(d):
             import special
@@ -583,6 +630,8 @@ class LibraryTab(ttk.Frame):
             self.p_var.set("")
             self.info_lbl.config(text=f"{len(self.sel)}개 선택됨" if self.sel else "")
         self.where.config(text=self._where_text())
+        if self.raw:
+            self._raw_kw_label()
         self._update_preview()
 
     def _out_base(self, d):
@@ -693,7 +742,7 @@ class LibraryTab(ttk.Frame):
         return fresh
 
     def _name_kw(self):
-        if not self.is_img:
+        if not self.is_img or self.raw or not hasattr(self, "name_pat"):
             return {}
         try:
             dig = int(self.name_dig.get())
@@ -709,6 +758,24 @@ class LibraryTab(ttk.Frame):
             self.app.settings.update(img_name_pat=nk["name_pattern"], img_name_dig=nk["digits"])
         except Exception:
             pass
+
+    def _raw_kw_list(self, d):
+        return [k for k in self._meta_raw(d).get("raw_keywords", []) if k.strip()] if d else []
+
+    def _raw_kw_label(self):
+        if not self.raw:
+            return
+        if len(self.sel) == 1:
+            n = len(self._raw_kw_list(self.sel[0]))
+            self.kw_lbl.config(text=f"키워드 {n}개 → 폴더 {n}개" if n else "키워드 없음 → 폴더 개수만큼")
+        else:
+            self.kw_lbl.config(text="")
+
+    def _raw_keywords(self):
+        if len(self.sel) != 1:
+            messagebox.showinfo(APP_NAME, "키워드 목록을 넣을 칸 하나를 먼저 골라주세요.")
+            return
+        RawKeywordDialog(self, self.sel[0])
 
     def _keyword_dialog(self):
         if len(self.sel) == 1 and self._is_bundle(self.sel[0]):
@@ -753,9 +820,10 @@ class LibraryTab(ttk.Frame):
         vary = self.vary.get()
         fresh = self._fresh_factory(kw)
         nk = self._name_kw()
+        raw_kws = {d: self._raw_kw_list(d) for d, _ in jobs} if self.raw else {}
 
         desktop = known_folder("desktop")
-        total = sum(len(f) * count for d, f in jobs) if self.is_img else count * len(jobs)
+        total = sum(len(f) * (len(raw_kws.get(d) or []) or count) for d, f in jobs) if self.is_img else count * len(jobs)
         self.prog.config(maximum=total, value=0)
         self.run_btn.config(state="disabled")
         self.result.config(text="만드는 중...")
@@ -770,7 +838,23 @@ class LibraryTab(ttk.Frame):
                 self.q.put(("prog", done[0]))
             try:
                 for d, files in jobs:
-                    if self.is_img:
+                    if self.raw and raw_kws.get(d):
+                        # 키워드 목록대로: 바탕화면\병원 시술 날짜\키워드\ 마다 원본 전부
+                        base = f"{self._out_base(d)} {datetime.now():%Y%m%d}"
+                        root = os.path.join(desktop, base)
+                        n = 2
+                        while os.path.exists(root):
+                            root = os.path.join(desktop, f"{base} ({n})")
+                            n += 1
+                        for kwd in raw_kws[d]:
+                            folder = os.path.join(root, self._safe(kwd))
+                            k = 2
+                            while os.path.exists(folder):
+                                folder = os.path.join(root, f"{self._safe(kwd)} ({k})")
+                                k += 1
+                            self._make_files(d, files, folder, rng, kw, tick, nk)
+                        outs.append(root)
+                    elif self.is_img:
                         for _ in range(count):
                             top = core.next_numbered_dir(desktop, self._out_base(d))
                             out = os.path.join(top, "output")
@@ -1642,3 +1726,74 @@ class SpecialDialog(tk.Toplevel):
         except Exception:
             pass
         self.destroy()
+
+
+class RawKeywordDialog(tk.Toplevel):
+    """이미지 생성 (원본): 키워드 목록 (엑셀에서 한 줄씩 붙여넣기) — 키워드마다 원본 폴더 하나"""
+
+    def __init__(self, tab, item):
+        super().__init__(tab.app.root)
+        self.tab, self.item = tab, item
+        m = tab._read_meta(item)
+        self.title(f"키워드 목록 - {m['hospital']} {m['procedure']}".strip())
+        self.transient(tab.app.root)
+        self.geometry("520x620")
+        f = ttk.Frame(self, padding=12)
+        f.pack(fill="both", expand=True)
+        top = ttk.Frame(f)
+        top.pack(fill="x")
+        ttk.Label(top, text="키워드 (한 줄에 하나)", font=FONT_B).pack(side="left")
+        help_label(top, "엑셀에서 키워드 칸을 긁어 그대로 붙여넣으세요 (Ctrl+V).\n"
+                        "빈 줄은 무시합니다. 키워드 하나마다 원본 폴더 하나가 만들어집니다.\n"
+                        "이 칸에 저장되어 다음에도 그대로 남아 있습니다.").pack(side="left", padx=8)
+        self.cnt = ttk.Label(top, text="", foreground="#0a5", font=FONT_B)
+        self.cnt.pack(side="right")
+        body = ttk.Frame(f)
+        body.pack(fill="both", expand=True, pady=8)
+        self.lines = tk.Text(body, width=4, padx=4, takefocus=0, bd=0, bg="#f0f0f0", fg="#888",
+                             font=("맑은 고딕", 10), state="disabled")
+        self.lines.pack(side="left", fill="y")
+        self.txt = tk.Text(body, wrap="none", font=("맑은 고딕", 10), undo=True, relief="solid", bd=1)
+        sb = ttk.Scrollbar(body, command=self._yview)
+        self.txt.configure(yscrollcommand=lambda a, b: (sb.set(a, b), self.lines.yview_moveto(a)))
+        self.txt.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        self.txt.insert("1.0", "\n".join(tab._meta_raw(item).get("raw_keywords", [])))
+        self.txt.bind("<<Modified>>", self._changed)
+        bar = ttk.Frame(f)
+        bar.pack(fill="x")
+        ttk.Button(bar, text="비우기", command=lambda: self.txt.delete("1.0", "end")).pack(side="left")
+        ttk.Button(bar, text="닫기", command=self._close).pack(side="right")
+        ttk.Button(bar, text="저장", style="Big.TButton", command=self._save).pack(side="right", padx=6)
+        self._refresh()
+        self.protocol("WM_DELETE_WINDOW", self._close)
+
+    def _yview(self, *a):
+        self.txt.yview(*a)
+        self.lines.yview(*a)
+
+    def _list(self):
+        return [l.strip() for l in self.txt.get("1.0", "end-1c").replace("\t", " ").split("\n") if l.strip()]
+
+    def _refresh(self):
+        n_lines = int(self.txt.index("end-1c").split(".")[0])
+        self.lines.config(state="normal")
+        self.lines.delete("1.0", "end")
+        self.lines.insert("1.0", "\n".join(str(i + 1) for i in range(n_lines)))
+        self.lines.config(state="disabled")
+        n = len(self._list())
+        self.cnt.config(text=f"키워드 {n}개 → 폴더 {n}개" if n else "키워드 없음 → 폴더 개수만큼")
+
+    def _changed(self, _e=None):
+        if self.txt.edit_modified():
+            self.txt.edit_modified(False)
+            self._refresh()
+
+    def _save(self):
+        self.tab._write_meta(self.item, raw_keywords=self._list())
+        self.tab._raw_kw_label()
+        self.tab.app.status(f"키워드 {len(self._list())}개를 저장했습니다.")
+        self.destroy()
+
+    def _close(self):
+        self._save()
