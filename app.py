@@ -542,13 +542,15 @@ def main():
             bd._toggle([k for k in bd.checks if k.endswith("노안")][0], False)
             bd.count.set(2)
             desk = os.path.join(tmp, "desk")
-            os.makedirs(os.path.join(desk, "밝은눈"))
-            bd._target_dir = lambda: (lambda d: d if not os.path.exists(d) else os.path.join(desk, "밝은눈 가공 1"))(os.path.join(desk, "밝은눈"))
+            os.makedirs(desk)
+            import tab_library as _tlb
+            _kf0 = _tlb.known_folder
+            _tlb.known_folder = lambda w: desk if w == "desktop" else _kf0(w)
             bd._run()
             bd.worker.join(120)
             bd._poll()
-            r = os.path.join(desk, "밝은눈 가공 1")
-            print("bundle out:", sorted(os.listdir(r)), sorted(os.listdir(os.path.join(r, "라식 1", "output"))), flush=True)
+            _tlb.known_folder = _kf0
+            print("bundle out:", sorted(os.listdir(desk)), sorted(os.listdir(os.path.join(desk, sorted(os.listdir(desk))[0], "output"))), flush=True)
             bd._close()
             cap.sel = [x for x in cap.sel if x != b] or [g[0] for g in cap.groups if not cap._is_bundle(g[0])][:1]
             cap._sync_selection()
