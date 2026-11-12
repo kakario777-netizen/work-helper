@@ -150,6 +150,12 @@ class LibraryTab(ttk.Frame):
             ttk.Label(g1, text="시술명").grid(row=1, column=0, sticky="w")
             ttk.Entry(g1, textvariable=self.p_var, width=18).grid(row=1, column=1, sticky="we", padx=6, pady=2)
         ttk.Button(g1, text="이름 저장", command=self._rename).grid(row=2, column=0, columnspan=2, sticky="we", pady=(6, 0))
+        sm = ttk.Frame(g1)
+        sm.grid(row=4, column=0, columnspan=2, sticky="we", pady=(6, 0))
+        ttk.Button(sm, text="원본 폴더 열기", command=self._open_item_folder).pack(side="left")
+        ttk.Button(sm, text="새로고침", command=lambda: self.reload()).pack(side="left", padx=4)
+        help_label(sm, "선택한 칸의 원본 이미지가 들어 있는 보관 폴더를 엽니다.\n"
+                       "거기서 이미지를 넣거나 빼거나 이름을 바꾼 뒤 '새로고침'(또는 탭 이동)을 누르면 반영됩니다.").pack(side="left", padx=4)
         self.info_lbl = ttk.Label(g1, text="", foreground=GRAY)
         self.info_lbl.grid(row=3, column=0, columnspan=2, sticky="w", pady=(6, 0))
         g1.columnconfigure(1, weight=1)
@@ -361,6 +367,13 @@ class LibraryTab(ttk.Frame):
             sp = self.is_img and self._is_special(d)
             t.config(bg=(SPECIAL_SEL if sp else SEL_BG) if on else (SPECIAL_BG if sp else NORM_BG),
                      relief="sunken" if on else "raised")
+
+    def _open_item_folder(self):
+        if not self.sel:
+            messagebox.showinfo(APP_NAME, "원본 폴더를 열 칸을 먼저 골라주세요.")
+            return
+        for d in self.sel[:5]:
+            open_folder(d)
 
     def _open_random(self, d):
         files = [f for f in self._files_of(d)]
