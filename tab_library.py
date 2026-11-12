@@ -338,6 +338,8 @@ class LibraryTab(ttk.Frame):
                 enable_drop(t, lambda paths, d=d: self._dropped(paths, target=d))
                 self.tiles[d] = t
             self._tile_list.append(t)
+        for t in list(self.tiles.values()) + [w for w in self._tile_list if isinstance(w, tk.Label)]:
+            self._press_look(t)
         self._cols = 0
         self._layout_grid()
         self._paint_tiles()
@@ -362,11 +364,24 @@ class LibraryTab(ttk.Frame):
             t.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
 
     def _paint_tiles(self):
+        """칸은 평소 늘 볼록(안 눌린 모양). 고른 칸은 파란 테두리로만 표시"""
+        try:
+            edge_off = ttk.Style().lookup("TFrame", "background") or "#f0f0f0"
+        except Exception:
+            edge_off = "#f0f0f0"
         for d, t in getattr(self, "tiles", {}).items():
             on = d in self.sel
             sp = self.is_img and self._is_special(d)
-            t.config(bg=(SPECIAL_SEL if sp else SEL_BG) if on else (SPECIAL_BG if sp else NORM_BG),
-                     relief="sunken" if on else "raised")
+            t.config(bg=SPECIAL_BG if sp else NORM_BG, relief="raised",
+                     highlightthickness=3, highlightbackground="#2f6fbf" if on else edge_off,
+                     highlightcolor="#2f6fbf" if on else edge_off)
+
+    def _press_look(self, w):
+        """누르는 순간에만 들어간 모양"""
+        orig = w.cget("relief")
+        w.bind("<ButtonPress-1>", lambda e: w.config(relief="sunken"), add="+")
+        w.bind("<ButtonRelease-1>", lambda e: w.config(relief=orig), add="+")
+        w.bind("<Leave>", lambda e: w.config(relief=orig), add="+")
 
     def _open_item_folder(self):
         if not self.sel:
