@@ -631,6 +631,28 @@ def main():
             rn._undo()
             _mb2.askyesno = _ok
             print("rename done:", after, "content kept:", same, "undo:", sorted(os.listdir(rdir)), flush=True)
+            # 칸 묶기 / 풀기
+            singles = [g[0] for g in cap.groups if not cap._is_bundle(g[0]) and not cap._is_special(g[0])]
+            if len(singles) >= 1:
+                import tkinter.simpledialog as _sdg
+                _ask = _sdg.askstring
+                _sdg.askstring = lambda *a, **k: "묶음병원"
+                extra = cap._new_group("임시", "시술B", core.list_images(singles[0]))
+                cap.reload()
+                cap.sel = [singles[0], extra]
+                cap._group_selected()
+                _sdg.askstring = _ask
+                gb = cap.sel[0]
+                print("group:", cap._is_bundle(gb), [os.path.basename(x) for x in cap._bundle_subs(gb)], flush=True)
+                import tkinter.messagebox as _mb3
+                _yes = _mb3.askyesno
+                _mb3.askyesno = lambda *a, **k: True
+                cap.sel = [gb]
+                cap._ungroup_selected()
+                _mb3.askyesno = _yes
+                print("ungroup:", os.path.exists(gb), [g[1] + " " + g[2] for g in cap.groups if not cap._is_bundle(g[0])][:6], flush=True)
+                cap.sel = [g[0] for g in cap.groups if not cap._is_special(g[0]) and not cap._is_bundle(g[0])][:1]
+                cap._sync_selection()
             # 원고 이미지 배치
             pl = app.text_tab.place
             mdir = os.path.join(tmp, "원고")

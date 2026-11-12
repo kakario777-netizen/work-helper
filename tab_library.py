@@ -154,6 +154,14 @@ class LibraryTab(ttk.Frame):
         sm.grid(row=4, column=0, columnspan=2, sticky="we", pady=(6, 0))
         ttk.Button(sm, text="원본 폴더 열기", command=self._open_item_folder).pack(side="left")
         ttk.Button(sm, text="새로고침", command=lambda: self.reload()).pack(side="left", padx=4)
+        if self.is_img:
+            gm = ttk.Frame(g1)
+            gm.grid(row=5, column=0, columnspan=2, sticky="we", pady=(6, 0))
+            ttk.Button(gm, text="선택한 칸 묶기", command=self._group_selected).pack(side="left")
+            ttk.Button(gm, text="묶음 풀기", command=self._ungroup_selected).pack(side="left", padx=4)
+            help_label(gm, "Ctrl+클릭으로 여러 칸을 고른 뒤 '선택한 칸 묶기'를 누르면 병원 칸 하나로 묶입니다.\n"
+                           "(각 칸은 그 병원 칸의 '세부 선택' 안 시술이 됩니다. 묶음 칸을 같이 고르면 거기에 합쳐요)\n"
+                           "'묶음 풀기'는 묶음 칸을 다시 낱개 칸으로 돌립니다.\n원본 이미지·키워드 목록·샘플은 그대로 따라갑니다.").pack(side="left", padx=4)
         help_label(sm, "선택한 칸의 원본 이미지가 들어 있는 보관 폴더를 엽니다.\n"
                        "거기서 이미지를 넣거나 빼거나 이름을 바꾼 뒤 '새로고침'(또는 탭 이동)을 누르면 반영됩니다.").pack(side="left", padx=4)
         self.info_lbl = ttk.Label(g1, text="", foreground=GRAY)
@@ -382,6 +390,84 @@ class LibraryTab(ttk.Frame):
         w.bind("<ButtonPress-1>", lambda e: w.config(relief="sunken"), add="+")
         w.bind("<ButtonRelease-1>", lambda e: w.config(relief=orig), add="+")
         w.bind("<Leave>", lambda e: w.config(relief=orig), add="+")
+
+    def _group_selected(self):
+        from tkinter import simpledialog
+        sel = list(self.sel)
+        bundles = [d for d in sel if self._is_bundle(d)]
+        items = [d for d in sel if not self._is_bundle(d)]
+        if len(bundles) > 1:
+            messagebox.showinfo(APP_NAME, "묶음 칸은 하나만 같이 고를 수 있습니다.")
+            return
+        if not items or (not bundles and len(items) < 2):
+            messagebox.showinfo(APP_NAME, "Ctrl+클릭으로 묶을 칸을 2개 이상 골라주세요.")
+            return
+        if bundles:
+            target = bundles[0]
+            h = self._read_meta(target)["hospital"]
+        else:
+            guess = self._read_meta(items[0])["hospital"]
+            h = simpledialog.askstring(APP_NAME, f"칸 {len(items)}개를 묶을 병원 이름", initialvalue=guess, parent=self)
+            if not h or not h.strip():
+                return
+            h = h.strip()
+            base = self._safe(h)
+            target = os.path.join(self.lib, base)
+            n = 2
+            while os.path.exists(target):
+                target = os.path.join(self.lib, f"{base} ({n})")
+                n += 1
+            os.makedirs(target)
+            self._write_meta(target, h, "", bundle=True)
+        errors = []
+        for d in items:
+            m = self._read_meta(d)
+            proc = m["procedure"] or m["hospital"] or os.path.basename(d)
+            dst = os.path.join(target, self._safe(proc))
+            k = 2
+            while os.path.exists(dst):
+                dst = os.path.join(target, f"{self._safe(proc)} ({k})")
+                k += 1
+            try:
+                shutil.move(d, dst)
+                self._write_meta(dst, h, proc)
+            except Exception as e:
+                errors.append(f"{os.path.basename(d)}: {e}")
+        self.reload(select=target)
+        if errors:
+            messagebox.showwarning(APP_NAME, "일부 칸을 옮기지 못했습니다. (사진이 열려 있으면 닫고 다시 해주세요)\n\n" + "\n".join(errors[:10]))
+        else:
+            self.app.status(f"'{h}' 칸으로 {len(items)}개를 묶었습니다.")
+
+    def _ungroup_selected(self):
+        bundles = [d for d in self.sel if self._is_bundle(d)]
+        if not bundles:
+            messagebox.showinfo(APP_NAME, "풀 묶음 칸을 골라주세요.")
+            return
+        if not messagebox.askyesno(APP_NAME, f"묶음 칸 {len(bundles)}개를 낱개 칸으로 풀까요?"):
+            return
+        last, errors = None, []
+        for b in bundles:
+            h = self._read_meta(b)["hospital"]
+            for sd in self._bundle_subs(b):
+                p = self._read_meta(sd)["procedure"] or os.path.basename(sd)
+                base = self._safe(f"{h} {p}")
+                dst = os.path.join(self.lib, base)
+                k = 2
+                while os.path.exists(dst):
+                    dst = os.path.join(self.lib, f"{base} ({k})")
+                    k += 1
+                try:
+                    shutil.move(sd, dst)
+                    self._write_meta(dst, h, p)
+                    last = dst
+                except Exception as e:
+                    errors.append(f"{os.path.basename(sd)}: {e}")
+            if not self._bundle_subs(b):
+                shutil.rmtree(b, ignore_errors=True)
+        self.reload(select=last)
+        if errors:
+            messagebox.showwarning(APP_NAME, "일부를 옮기지 못했습니다.\n\n" + "\n".join(errors[:10]))
 
     def _open_item_folder(self):
         if not self.sel:
