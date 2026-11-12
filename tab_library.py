@@ -17,7 +17,7 @@ from common import (APP_NAME, GRAY, FONT, FONT_B, known_folder, enable_drop, dro
 META = "_정보.json"
 TILE_MIN = 130
 SEL_BG, NORM_BG, ADD_BG = "#cfe3ff", "#f4f4f4", "#ffffff"
-SPECIAL_BG, SPECIAL_SEL = "#dcecfb", "#9cc9f2"   # 특수 가공 칸: 연한 파랑
+SPECIAL_BG, SPECIAL_SEL = NORM_BG, SEL_BG   # 특수 칸도 다른 칸과 같은 색 (★ 표시만)
 
 
 class LibraryTab(ttk.Frame):
@@ -311,7 +311,7 @@ class LibraryTab(ttk.Frame):
             elif self.is_img and self._is_special(g[0]):
                 d, h, p, n = g
                 t = tk.Label(inner, text=f"★ {h}\n{p}\n\n{n}장", bg=SPECIAL_BG, relief="raised", bd=2,
-                             width=1, height=6, font=FONT, cursor="hand2", wraplength=TILE_MIN - 12, fg="#14467a")
+                             width=1, height=6, font=FONT, cursor="hand2", wraplength=TILE_MIN - 12)
                 t.bind("<Button-1>", lambda e, d=d: self._tile_click(e, d))
                 t.bind("<Double-Button-1>", lambda e, d=d: SpecialDialog(self, d))
                 self.tiles[d] = t
@@ -1469,7 +1469,7 @@ class SpecialDialog(tk.Toplevel):
         ttk.Label(g2, text="시술명").grid(row=1, column=0, sticky="w")
         self.p_var = tk.StringVar(value=m0.get("procedure", "특수"))
         ttk.Entry(g2, textvariable=self.p_var, width=20).grid(row=1, column=1, sticky="we", padx=6, pady=2)
-        help_label(g2, "저장하면 이미지 생성 탭에 연한 파란색 '★' 칸이 맨 앞에 생깁니다.\n"
+        help_label(g2, "저장하면 이미지 생성 탭 맨 앞에 '★' 칸이 생깁니다.\n"
                        "그 칸을 고르고 '선택 항목 만들기'로 다른 칸처럼 폴더 개수만큼 만듭니다.\n"
                        "(이미지는 이 창의 순서대로, 워터마크·GIF 설정도 이 버튼에 저장)\n\n"
                        "'병원 버튼 안에 넣기'를 고르면 그 병원 칸의 '세부 선택' 안에 시술 하나로 들어갑니다.\n"
