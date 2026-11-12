@@ -646,7 +646,7 @@ class LibraryTab(ttk.Frame):
         desk = known_folder("desktop")
         if self.is_img:
             ex = os.path.basename(core.next_numbered_dir(desk, self._out_base(self.sel[0])))
-            tail = "\\output\\"
+            tail = "\\" if self.raw else "\\output\\"
         else:
             ex = os.path.basename(core.next_numbered_file(desk, self._out_base(self.sel[0])))
             tail = ""
@@ -857,7 +857,7 @@ class LibraryTab(ttk.Frame):
                     elif self.is_img:
                         for _ in range(count):
                             top = core.next_numbered_dir(desktop, self._out_base(d))
-                            out = os.path.join(top, "output")
+                            out = top if self.raw else os.path.join(top, "output")   # 원본 복사는 output 없이 바로
                             self._make_files(d, files, out, rng, fresh(rng) if vary else kw, tick, nk)
                             outs.append(top)
                     else:
@@ -1303,7 +1303,7 @@ class BundleDialog(tk.Toplevel):
                 for sd, proc, files in jobs:
                     for k in range(count):
                         folder = os.path.join(root, safe(proc) if count == 1 else f"{safe(proc)} {k + 1}")
-                        out = os.path.join(folder, "output") if use_out else folder
+                        out = os.path.join(folder, "output") if (use_out and not self.tab.raw) else folder
                         self.tab._make_files(sd, files, out, rng, fresh(rng) if per else run_kw, tick, name_kw)
                         made += 1
                 self.q.put(("done", made, None))
