@@ -14,7 +14,7 @@ import time
 import urllib.request
 import zipfile
 
-REPO = "kakario777-netizen/work-helper"
+REPO = "kakario777-netizen/work-helper-release"
 ASSET = "WorkHelper.zip"
 SETUP = "WorkHelper_Setup.exe"
 EXE = "WorkHelper.exe"
