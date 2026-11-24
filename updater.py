@@ -14,7 +14,7 @@ import time
 import urllib.request
 import zipfile
 
-REPO = "kakario777-netizen/work-helper-release"
+REPO = "kakario777-netizen/work-helper"
 ASSET = "WorkHelper.zip"
 SETUP = "WorkHelper_Setup.exe"
 EXE = "WorkHelper.exe"
@@ -36,15 +36,43 @@ def parse_ver(v):
     return tuple(int(n) for n in nums) if nums else (0,)
 
 
+ALLOWED_PREFIX = f"https://github.com/{REPO}/releases/download/"
+
+
 def latest_release(timeout=15):
-    """반환: {"tag","notes","url","size"}  (실패 시 예외)"""
+    """반환: {"tag","notes","url","size","sha256"}  (실패 시 예외)
+    업데이트는 이 프로그램의 GitHub 저장소 릴리스에서만 HTTPS로 받음(주소 변경 설정 없음)"""
     req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/releases/latest",
                                  headers={"User-Agent": "WorkHelper", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.load(r)
     asset = next((a for a in data.get("assets", []) if a.get("name") == SETUP), None)
+    url = asset["browser_download_url"] if asset else None
+    if url and not url.startswith(ALLOWED_PREFIX):
+        url = None   # 다른 곳을 가리키면 받지 않음
+    dg = (asset or {}).get("digest") or ""
     return {"tag": data.get("tag_name", ""), "notes": data.get("body") or "",
-            "url": asset["browser_download_url"] if asset else None, "size": asset["size"] if asset else 0}
+            "url": url, "size": asset["size"] if asset else 0,
+            "sha256": dg.split(":", 1)[1].lower() if dg.startswith("sha256:") else ""}
+
+
+def verify(path, size=0, sha256=""):
+    """내려받은 설치 파일 확인: 크기·SHA-256(릴리스에 적힌 값)·윈도우 실행 파일 형식"""
+    import hashlib
+    real = os.path.getsize(path)
+    if size and real != size:
+        raise RuntimeError(f"내려받은 파일 크기가 맞지 않습니다. ({real} / {size})")
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        head = f.read(2)
+        f.seek(0)
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    if head != b"MZ":
+        raise RuntimeError("내려받은 파일이 설치 파일 형식이 아닙니다.")
+    if sha256 and h.hexdigest() != sha256:
+        raise RuntimeError("내려받은 파일 검사값(SHA-256)이 릴리스와 다릅니다. 다시 시도해주세요.")
+    return True
 
 
 def is_newer(tag, current):
@@ -52,6 +80,8 @@ def is_newer(tag, current):
 
 
 def download(url, progress=None, name=SETUP):
+    if not url.startswith(ALLOWED_PREFIX):
+        raise RuntimeError("허용되지 않은 업데이트 주소입니다.")
     shutil.rmtree(WORK, ignore_errors=True)
     os.makedirs(WORK, exist_ok=True)
     zpath = os.path.join(WORK, name)

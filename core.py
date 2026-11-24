@@ -191,7 +191,7 @@ def guess_title(text):
 
 
 def count_keywords(text, keyword_field):
-    """'서울역피부과, 수술흉터제거' → [('서울역피부과', 5), ...]"""
+    """'예시피부과, 수술흉터제거' → [('예시피부과', 5), ...]"""
     res = []
     for k in re.split(r"[,，]", keyword_field):
         k = k.strip()

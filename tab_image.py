@@ -408,7 +408,7 @@ class BlankTxtPanel(ttk.Frame):
         ttk.Button(top, text="목록 비우기", command=self._clear).pack(side="left")
         help_label(top, f"병원 폴더들을 {drop_hint()}'폴더 추가'로 넣고 '빈 원고 생성하기'를 누르세요.\n"
                         "폴더마다 같은 이름의 빈 메모장(.txt)을 그 폴더와 같은 위치에 만듭니다.\n"
-                        "예: 바탕화면\\서울리더스 치아교정  →  바탕화면\\서울리더스 치아교정.txt\n\n"
+                        "예: 바탕화면\\샘플치과 교정  →  바탕화면\\샘플치과 교정.txt\n\n"
                         "이미 같은 이름의 메모장이 있으면 건드리지 않고 건너뜁니다.").pack(side="left", padx=10)
         self.count_lbl = ttk.Label(top, text="0개")
         self.count_lbl.pack(side="right")

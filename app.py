@@ -320,6 +320,7 @@ class UpdateDialog(tk.Toplevel):
             return
         try:
             z = updater.download(info["url"], lambda g, t: self._post("prog", g, t or info["size"]))
+            updater.verify(z, info["size"], info.get("sha256", ""))
             self._post("apply", z)
         except Exception as e:
             self._post("err", f"업데이트 중 문제가 생겼습니다.\n{e}")
@@ -405,16 +406,16 @@ def main():
             from PIL import Image
             tmp = tempfile.mkdtemp()
             # 원고 검사
-            p = os.path.join(tmp, "01_서울역피부과 원고.txt")
+            p = os.path.join(tmp, "01_예시피부과 원고.txt")
             with open(p, "w", encoding="utf-8") as f:
-                f.write("서울역피부과 안내입니다. 전문 상담과 자료를 준비했어요. 서울역피부과")
+                f.write("예시피부과 안내입니다. 전문 상담과 자료를 준비했어요. 예시피부과")
             chk = app.text_tab.check
             chk.add_paths([tmp])
             print("check:", chk.tree.item(chk.tree.get_children()[0], "values"), flush=True)
             # 보고서 정리
-            app.text_tab.rank_in.insert("1.0", "서울역피부과\thttps://blog.naver.com/a/1\t8\t나음피부과")
+            app.text_tab.rank_in.insert("1.0", "예시피부과\thttps://blog.naver.com/example/1\t8\t샘플피부과")
             app.text_tab._do_rank()
-            app.text_tab.nate_in.insert("1.0", "https://blog.naver.com/a/1\n\n일산백옥주사\n\nhttps://blog.naver.com/b/2 65세이상 임플란트\n")
+            app.text_tab.nate_in.insert("1.0", "https://blog.naver.com/example/1\n\n예시키워드\n\nhttps://blog.naver.com/example/2 샘플키워드\n")
             app.text_tab._do_nate()
             print("nate:", app.text_tab.nate_out.get("1.0", "end-1c").replace("\t", " | ").replace("\n", " // "), flush=True)
             print("report:", app.text_tab.rank_out.get("1.0", "end-1c"), flush=True)
@@ -430,7 +431,7 @@ def main():
             app.settings.pop("sub_order")
             app.apply_layout()
             # 이미지 관리 색감 + output
-            src = os.path.join(tmp, "나음피부과-수술흉터제거")
+            src = os.path.join(tmp, "샘플피부과-수술흉터제거")
             os.makedirs(src)
             for i in range(3):
                 Image.effect_mandelbrot((1400 - i * 100, 1000), (-2, -1.5, 1, 1.5), 60 + i).convert("RGB").save(
@@ -465,14 +466,15 @@ def main():
             app.collect()
             print("saved keys:", sorted(k for k in app.settings if k.startswith(("img_", "panes", "im_")))[:12], flush=True)
             try:   # 빌드 서버는 GitHub 요청 횟수 제한에 걸릴 수 있어 실패해도 넘어감
-                print("update check:", updater.latest_release().get("tag"), "ver", VERSION, flush=True)
+                _li = updater.latest_release()
+                print("update check:", _li.get("tag"), "ver", VERSION, "url ok", bool(_li.get("url")), "sha", bool(_li.get("sha256")), flush=True)
             except Exception as e:
                 print("update check skipped:", e, flush=True)
             rng = random.Random()
             for _ in range(2):
                 top = core.next_numbered_dir(tmp, cap._out_base(cap.sel[0]))
                 core.make_folder_set(core.list_images(cap.sel[0]), os.path.join(top, "output"), rng, **kw)
-            dirs = sorted(x for x in os.listdir(tmp) if x.startswith("나음피부과 수술흉터제거 "))
+            dirs = sorted(x for x in os.listdir(tmp) if x.startswith("샘플피부과 수술흉터제거 "))
             print("capture:", dirs, [len(os.listdir(os.path.join(tmp, x, "output"))) for x in dirs], flush=True)
             from PIL import Image as _I
             o1 = os.path.join(tmp, dirs[0], "output")
@@ -481,10 +483,10 @@ def main():
             cap.name_pat.set("image{번호}")
             cap.name_dig.set(3)
             kd = KeywordDialog(cap, cap.sel[0])
-            kd.rows[0][1].set("일산백옥주사")
-            kd.rows[1][1].set("일산코필러")
+            kd.rows[0][1].set("예시키워드")
+            kd.rows[1][1].set("샘플키워드")
             kd.rows[1][0].set(False)
-            kd.rows[2][1].set("65세이상 임플란트")
+            kd.rows[2][1].set("샘플키워드")
             kd.times.set(2)
             kd._save()
             kd.out_root = os.path.join(tmp, "kwout")
@@ -519,16 +521,16 @@ def main():
             open(junk, "wb").write(b"x")
             print("recycle:", core.recycle([junk]), os.path.exists(junk), flush=True)
             bl = app.image_area.blank
-            for nm in ("서울리더스 치아교정", "밝은눈 라식"):
+            for nm in ("샘플치과 교정", "예시안과 시술A"):
                 os.makedirs(os.path.join(tmp, "blank", nm), exist_ok=True)
-            open(os.path.join(tmp, "blank", "밝은눈 라식.txt"), "w").close()
+            open(os.path.join(tmp, "blank", "예시안과 시술A.txt"), "w").close()
             bl._drop([os.path.join(tmp, "blank", n) for n in os.listdir(os.path.join(tmp, "blank"))])
             bl._run()
             print("blank txt:", sorted(os.listdir(os.path.join(tmp, "blank"))), bl.result.cget("text"), flush=True)
             # 묶음 칸: 한 병원 폴더(시술 3개) → 칸 하나 + 세부 선택
             from tab_library import BundleDialog
-            hosp = os.path.join(tmp, "밝은눈")
-            for proc in ("라식", "백내장", "노안"):
+            hosp = os.path.join(tmp, "예시안과")
+            for proc in ("시술A", "시술B", "시술C"):
                 os.makedirs(os.path.join(hosp, proc))
                 for k in range(2):
                     Image.effect_mandelbrot((900, 700), (-2, -1.5, 1, 1.5), 40 + k).convert("RGB").save(
@@ -539,7 +541,7 @@ def main():
             print("bundle:", cap._is_bundle(b), len(cap.groups) - n_before, "칸,",
                   [os.path.basename(x) for x in cap._bundle_subs(b)], flush=True)
             bd = BundleDialog(cap, b)
-            bd._toggle([k for k in bd.checks if k.endswith("노안")][0], False)
+            bd._toggle([k for k in bd.checks if k.endswith("시술C")][0], False)
             bd.count.set(2)
             desk = os.path.join(tmp, "desk")
             os.makedirs(desk)
@@ -598,7 +600,7 @@ def main():
             one = [g[0] for g in rt.groups if not rt._is_bundle(g[0]) and not rt._is_special(g[0])][0]
             rt.sel = [one]
             rt._sync_selection()
-            rt._write_meta(one, raw_keywords=["오스템임플란트 가격 비용", "전체임플란트", "강남역치과 임플란트수술"])
+            rt._write_meta(one, raw_keywords=["예시 키워드 하나", "예시 키워드 둘", "예시 키워드 셋"])
             rt._raw_kw_label()
             rawdesk = os.path.join(tmp, "rawdesk")
             os.makedirs(rawdesk)
@@ -659,8 +661,8 @@ def main():
             pl = app.text_tab.place
             mdir = os.path.join(tmp, "원고")
             os.makedirs(mdir)
-            orig = "서울역피부과 레이저 안내\r\n\r\n안녕하세요\r\n\r\n문단1 줄1\r\n문단1 줄2\r\n\r\n문단2\r\n\r\n문단3\r\n\r\n#태그\r\n"
-            mp = os.path.join(mdir, "서울역 원고.txt")
+            orig = "예시피부과 레이저 안내\r\n\r\n안녕하세요\r\n\r\n문단1 줄1\r\n문단1 줄2\r\n\r\n문단2\r\n\r\n문단3\r\n\r\n#태그\r\n"
+            mp = os.path.join(mdir, "예시 원고.txt")
             open(mp, "w", encoding="utf-8", newline="").write(orig)
             pl._drop([mdir])
             pl._fill_groups()
@@ -685,54 +687,20 @@ def main():
             bks = os.listdir(os.path.join(tmp, "원고 수정 원본"))
             print("place:", after.replace("\r\n", " / "), flush=True)
             print("place backup:", bks, open(os.path.join(tmp, "원고 수정 원본", bks[0]), "rb").read().decode() == orig, flush=True)
-            # 순위 체크: 표 붙여넣기 + 실제 네이버 검색
+            # 순위 체크: 표 붙여넣기 (가짜 예시)
             rp = app.text_tab.rank
             app.root.clipboard_clear()
-            app.root.clipboard_append("1\t거제치과\thttps://blog.naver.com/jannypooh/224464524715\t\t서울연세탑\n"
-                                      "2\t서면스마일라식\thttps://naver.me/GuCJYWB2\t\t밝은눈\n"
-                                      "3\t하지정맥류원인\thttps://cafe.naver.com/cantsb/3692588\t\t에스메디\n")
+            app.root.clipboard_append("1\t예시키워드\thttps://blog.naver.com/example/1001\t\t예시병원\n"
+                                      "2\t샘플키워드\thttps://blog.naver.com/example/1002\t\t샘플병원\n"
+                                      "3\t테스트키워드\thttps://cafe.naver.com/example/1003\t\t테스트병원\n")
             rp.data = []
             rp.paste()
             from tab_rank import col_letter
             print("rank paste:", rp.ncols, "칸, 순위 칸 =", col_letter(rp.rank_col()), flush=True)
-            import rankcheck, time as _t
-            print("naver.me →", rankcheck.resolve("https://naver.me/GuCJYWB2"), flush=True)
-            try:
-                ck = rankcheck.Checker(os.path.join(tmp, "browser"))
-                for kw, link in (("거제치과", "https://blog.naver.com/jannypooh/224464524715"),
-                                 ("서면스마일라식", "https://naver.me/GuCJYWB2"),
-                                 ("하지정맥류원인", "https://cafe.naver.com/cantsb/3692588")):
-                    t0 = _t.time()
-                    pg = ck.search(kw)
-                    if pg.get("captcha"):
-                        print("rank", kw, "CAPTCHA", flush=True)
-                        continue
-                    print("rank sections", kw, [(x["title"], x["n"], x["web"], x["excluded"]) for x in pg.get("sections", [])
-                                                if x["n"]][:14], flush=True)
-                    print("rank items", kw, "→ parts", pg.get("parts"), len(pg.get("items", [])), "개:",
-                          [it["text"][:28] for it in pg.get("items", [])[:6]], flush=True)
-                    print("rank hrefs", kw, [it["hrefs"][:2] for it in pg.get("items", [])[:4]], flush=True)
-                    rk, how = ck.find(link)
-                    print("rank same hospital", kw, ck.find_hospital({"거제치과": "서울연세탑", "서면스마일라식": "밝은눈", "하지정맥류원인": "에스메디"}[kw]), flush=True)
-                    shp = ck.shot(rk, os.path.join(tmp, "shots", kw + ".jpg"))
-                    print("rank result", kw, rk, how, "shot", shp and os.path.getsize(shp), f"{_t.time() - t0:.1f}s", flush=True)
-                ck.close()
-            except Exception as e:
-                import traceback
-                print("rank live fail:", e, traceback.format_exc()[-600:], flush=True)
-            import extractor
-            for u in ("https://blog.naver.com/aaipfteejc4n/224463697294",
-                      "https://blog.naver.com/y9tfzmtbzxz/224463718647"):
-                try:
-                    t_, b_ = extractor.extract(u)
-                    print("extract:", u.rsplit("/", 1)[-1], "|", t_, "|", len("".join(b_.split())), "자 |",
-                          b_[:120].replace("\n", " / "), flush=True)
-                except Exception as e:
-                    print("extract fail:", u, e, flush=True)
             from tab_extract import BulkDialog
             bd = BulkDialog(app.text_tab.extract)
-            bd.rows[0][1].set("일산백옥주사")
-            bd.rows[0][2].insert("1.0", "https://blog.naver.com/aaipfteejc4n/224463697294\nhttps://blog.naver.com/aaipfteejc4n/224463701057")
+            bd.rows[0][1].set("예시키워드")
+            bd.rows[0][2].insert("1.0", "https://blog.naver.com/example/2001\nhttps://blog.naver.com/example/2002")
             bd._save()
             print("bulk saved:", app.settings.get("ex_bulk"), flush=True)
             bd.destroy()

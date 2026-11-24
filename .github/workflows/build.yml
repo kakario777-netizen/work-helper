@@ -1,9 +1,16 @@
 name: 윈도우 프로그램 빌드
 
+# 릴리스용 빌드만: main 에 코드가 올라갈 때(설명 문서만 바뀌면 건너뜀) 또는 수동 실행.
+# 풀 리퀘스트로는 실행되지 않아 외부인이 빌드를 돌릴 수 없음. 비밀값(Secrets)은 쓰지 않음.
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", ".gitignore"]
   workflow_dispatch:
+
+concurrency:
+  group: release-build
+  cancel-in-progress: false
 
 permissions:
   contents: write
